@@ -401,14 +401,10 @@ impl DrawerWindow
                 self.image[position] = self.draw_color;
             } else if let Some(position) = self.mouse_inside(&self.ui_group.selector_1d)
             {
-                self.color_slider = 1.0 - position.y;
+                self.color_slider = position.y;
             } else if let Some(position) = self.mouse_inside(&self.ui_group.selector_2d)
             {
-                self.draw_color = Self::select_color(
-                    self.color_slider,
-                    position.x,
-                    1.0 - position.y
-                );
+                self.draw_color = Self::select_color(self.color_slider, position.x, position.y);
             }
         }
     }
@@ -427,6 +423,13 @@ impl DrawerWindow
             .borrow()
             .element()
             .inside_position(mouse_position)
+            .map(|pos|
+            {
+                Point2{
+                    y: 1.0 - pos.y,
+                    ..pos
+                }
+            })
     }
 
     fn mouse_image(&self) -> Option<Point2<usize>>
@@ -436,12 +439,7 @@ impl DrawerWindow
         let size = self.ui.pixels_size(element).map(|x| x as f32);
         self.mouse_inside(element).map(|pos|
         {
-            let flipped_pos = Point2{
-                y: 1.0 - pos.y,
-                ..pos
-            };
-
-            (flipped_pos * size).zip(self.image.size())
+            (pos * size).zip(self.image.size())
                 .map(|(mouse, size)|
                 {
                     (mouse as f32 * self.scale).round() as usize % size
