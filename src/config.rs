@@ -561,7 +561,8 @@ pub struct Config
     pub input: Option<String>,
     pub output: String,
     pub width: usize,
-    pub height: usize
+    pub height: usize,
+    pub billinear: bool
 }
 
 impl Config
@@ -574,12 +575,15 @@ impl Config
         let mut width: usize = 16;
         let mut height: usize = 16;
 
+        let mut billinear = false;
+
         let mut parser = ArgParser::new();
 
         parser.push(&mut input, 'i', "input", "input file");
         parser.push(&mut width, 'w', "width", "width of the image");
         parser.push(&mut height, 'H', "height", "height of the image");
         parser.push(&mut output, 'o', "output", "output file");
+        parser.push_flag(&mut billinear, None, "billinear", "use billinear interpolation for display", true);
 
         parser.parse(args).unwrap_or_else(|err| complain(err));
 
@@ -587,7 +591,8 @@ impl Config
             input,
             width,
             height,
-            output
+            output,
+            billinear
         }
     }
 

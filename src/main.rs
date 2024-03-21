@@ -165,6 +165,7 @@ struct DrawerWindow
     ui: Ui,
     ui_group: UiGroup,
     scale: f32,
+    billinear: bool,
     mouse_position: Point2<i32>,
     draw_held: bool,
     minus_held: bool,
@@ -173,7 +174,7 @@ struct DrawerWindow
 
 impl DrawerWindow
 {
-    pub fn new(image: Image) -> Self
+    pub fn new(image: Image, billinear: bool) -> Self
     {
         let ctx = sdl2::init().unwrap();
 
@@ -227,6 +228,7 @@ impl DrawerWindow
             ui,
             ui_group,
             scale,
+            billinear,
             mouse_position: Point2{x: 0, y: 0},
             draw_held: false,
             minus_held: false,
@@ -245,12 +247,20 @@ impl DrawerWindow
         {
             for x in 0..output.width
             {
-                let pos = Point2{x, y}.zip(self.image.size()).map(|(a, b)|
+                let pos = Point2{x, y}.map(|a|
                 {
-                    (a as f32 * self.scale).round() as usize % b
+                    a as f32 * self.scale
                 });
 
-                output[Point2{x, y}] = self.image[pos];
+                output[Point2{x, y}] = if self.billinear
+                {
+                    let pos = pos.zip(self.image.size()).map(|(a, b)| a % b as f32);
+
+                    self.image.get_billinear_overflowing(pos)
+                } else
+                {
+                    self.image[pos.zip(self.image.size()).map(|(a, b)| a.round() as usize % b)]
+                };
             }
         }
     }
@@ -414,6 +424,54 @@ impl Image
         }).save(path)
     }
 
+    pub fn get_billinear_saturating(&self, point: Point2<f32>) -> Color
+    {
+        self.get_billinear_with(|p| self.get_saturating(p), point)
+    }
+
+    pub fn get_billinear_overflowing(&self, point: Point2<f32>) -> Color
+    {
+        self.get_billinear_with(|p| self.get_overflowing(p), point)
+    }
+
+    fn get_billinear_with<G>(&self, mut g: G, point: Point2<f32>) -> Color
+    where
+        G: FnMut(Point2<i32>) -> Color
+    {
+        let low = point.map(|x| x.floor() as i32);
+        let high = point.map(|x| x.ceil() as i32);
+
+        let x_lerp = point.x.fract();
+        let top = Self::lerp(
+            g(Point2{x: low.x, y: high.y}),
+            g(Point2{x: high.x, y: high.y}),
+            x_lerp
+        );
+
+        let bottom = Self::lerp(
+            g(Point2{x: low.x, y: low.y}),
+            g(Point2{x: high.x, y: low.y}),
+            x_lerp
+        );
+
+        Self::lerp(bottom, top, point.y.fract())
+    }
+
+    fn lerp(a: Color, b: Color, t: f32) -> Color
+    {
+        let mix = |a: u8, b: u8, t: f32|
+        {
+            (a as f32 * (1.0 - t) + b as f32 * t).round() as u8
+        };
+
+        Color{
+            r: mix(a.r, b.r, t),
+            g: mix(a.g, b.g, t),
+            b: mix(a.b, b.b, t),
+            a: mix(a.a, b.a, t),
+        }
+    }
+
     pub fn data_bytes(&self) -> Vec<u8>
     {
         self.data.iter().flat_map(|p|
@@ -433,6 +491,31 @@ impl Image
             x: self.width,
             y: self.height
         }
+    }
+
+    pub fn get_saturating(&self, pos: Point2<i32>) -> Color
+    {
+        let pos = pos.zip(self.size()).map(|(x, size)| x.clamp(0, size as i32 - 1) as usize);
+
+        self[pos]
+    }
+
+    pub fn get_overflowing(&self, pos: Point2<i32>) -> Color
+    {
+        let pos = pos.zip(self.size()).map(|(x, size)|
+        {
+            let x = x % size as i32;
+
+            (if x < 0
+            {
+                size as i32 + x
+            } else
+            {
+                x
+            }) as usize
+        });
+
+        self[pos]
     }
 
     #[allow(dead_code)]
@@ -521,7 +604,7 @@ fn main()
 
     let image = Image::from(image);
 
-    let mut window = DrawerWindow::new(image);
+    let mut window = DrawerWindow::new(image, config.billinear);
 
     window.wait_exit();
 
