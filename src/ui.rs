@@ -62,7 +62,7 @@ pub struct UiElement
     pub kind: UiElementType,
     pub pos: Point2<f32>,
     pub size: Point2<f32>,
-    pub texture: TextureId
+    pub texture: Option<TextureId>
 }
 
 pub struct UiElementGlobal
@@ -109,7 +109,7 @@ pub struct UiElementInner
 impl UiElementInner
 {
     #[allow(dead_code)]
-    pub fn texture(&mut self) -> &mut TextureId
+    pub fn texture(&mut self) -> &mut Option<TextureId>
     {
         &mut self.element.inner.texture
     }
@@ -332,24 +332,27 @@ impl Ui
 
         self.for_each_element(|_id, element|
         {
-            let texture = assets.texture(element.inner.texture);
+            if let Some(texture_id) = element.inner.texture
+            {
+                let texture = assets.texture(texture_id);
 
-            let scaled_pos = {
-                let mut pos = element.global_pos;
+                let scaled_pos = {
+                    let mut pos = element.global_pos;
 
-                pos.y = 1.0 - pos.y - element.global_size.y;
+                    pos.y = 1.0 - pos.y - element.global_size.y;
 
-                pos * window_size
-            }.map(|x| x.round() as i32);
+                    pos * window_size
+                }.map(|x| x.round() as i32);
 
-            let x = scaled_pos.x;
-            let y = scaled_pos.y;
+                let x = scaled_pos.x;
+                let y = scaled_pos.y;
 
-            let Point2{x: width, y: height} = self.pixels_size_inner(element);
+                let Point2{x: width, y: height} = self.pixels_size_inner(element);
 
-            self.window.borrow_mut().canvas
-                .copy(&texture, None, Rect::new(x, y, width, height))
-                .unwrap();
+                self.window.borrow_mut().canvas
+                    .copy(&texture, None, Rect::new(x, y, width, height))
+                    .unwrap();
+            }
         });
     }
 

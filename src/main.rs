@@ -153,7 +153,11 @@ impl WindowWrapper
 struct UiGroup
 {
     pub main_texture: TextureId,
-    pub main_screen: ElementId
+    pub main_screen: ElementId,
+    pub selector_2d_texture: TextureId,
+    pub selector_2d: ElementId,
+    pub selector_1d_texture: TextureId,
+    pub selector_1d: ElementId
 }
 
 struct DrawerWindow
@@ -165,8 +169,10 @@ struct DrawerWindow
     ui: Ui,
     ui_group: UiGroup,
     scale: f32,
+    color_slider: f32,
     billinear: bool,
     mouse_position: Point2<i32>,
+    draw_color: Color,
     draw_held: bool,
     minus_held: bool,
     plus_held: bool
@@ -206,18 +212,56 @@ impl DrawerWindow
 
         let mut ui = Ui::new(window.clone(), assets.clone());
 
+        let pos = Point2{x: 0.3, y: 0.0};
         let element = UiElement{
             kind: UiElementType::Panel,
-            pos: Point2{x: 0.5, y: 0.5},
-            size: Point2{x: 0.4, y: 0.4},
-            texture: main_texture
+            pos,
+            size: Point2{x: 1.0 - pos.x, y: 1.0},
+            texture: Some(main_texture)
         };
 
         let main_screen = ui.push(element);
 
+        let color_image = Image::repeat(1, 1, Color{r: 0, g: 0, b: 0, a: 255});
+        let selector_2d_texture = assets.borrow_mut().add_texture(&color_image);
+        let selector_1d_texture = assets.borrow_mut().add_texture(&color_image);
+
+        let height = 0.4;
+        let element = UiElement{
+            kind: UiElementType::Panel,
+            pos: Point2{x: 0.0, y: 1.0 - height},
+            size: Point2{x: pos.x, y: height},
+            texture: None
+        };
+
+        let color_selector = ui.push(element);
+
+        let div = 0.9;
+        let element = UiElement{
+            kind: UiElementType::Panel,
+            pos: Point2{x: 0.0, y: 0.0},
+            size: Point2{x: div, y: 1.0},
+            texture: Some(selector_2d_texture)
+        };
+
+        let selector_2d = ui.push_child(&color_selector, element);
+
+        let element = UiElement{
+            kind: UiElementType::Panel,
+            pos: Point2{x: div, y: 0.0},
+            size: Point2{x: 1.0 - div, y: 1.0},
+            texture: Some(selector_1d_texture)
+        };
+
+        let selector_1d = ui.push_child(&color_selector, element);
+
         let ui_group = UiGroup{
             main_texture,
-            main_screen
+            main_screen,
+            selector_2d_texture,
+            selector_2d,
+            selector_1d_texture,
+            selector_1d
         };
 
         Self{
@@ -228,8 +272,10 @@ impl DrawerWindow
             ui,
             ui_group,
             scale,
+            color_slider: 0.0,
             billinear,
             mouse_position: Point2{x: 0, y: 0},
+            draw_color: Color{r: 0, g: 0, b: 0, a: 255},
             draw_held: false,
             minus_held: false,
             plus_held: false
@@ -243,36 +289,91 @@ impl DrawerWindow
 
     fn draw_main_image(&self, output: &mut Image)
     {
-        for y in 0..output.height
+        output.pixels_mut().for_each(|(big_pos, color)|
         {
-            for x in 0..output.width
+            let pos = big_pos.map(|a|
             {
-                let pos = Point2{x, y}.map(|a|
-                {
-                    a as f32 * self.scale
-                });
+                a as f32 * self.scale
+            });
 
-                output[Point2{x, y}] = if self.billinear
-                {
-                    let pos = pos.zip(self.image.size()).map(|(a, b)| a % b as f32);
+            *color = if self.billinear
+            {
+                let pos = pos.zip(self.image.size()).map(|(a, b)| a % b as f32);
 
-                    self.image.get_billinear_overflowing(pos)
-                } else
-                {
-                    self.image[pos.zip(self.image.size()).map(|(a, b)| a.round() as usize % b)]
-                };
-            }
-        }
+                self.image.get_billinear_overflowing(pos)
+            } else
+            {
+                self.image[pos.zip(self.image.size()).map(|(a, b)| a.round() as usize % b)]
+            };
+        });
+    }
+
+    fn select_color(x: f32, y: f32, z: f32) -> Color
+    {
+        let f = |a|
+        {
+            (a * 255.0) as u8
+        };
+
+        Color{r: f(x), g: f(y), b: f(z), a: 255}
+    }
+
+    fn draw_selector2d_image(&self, output: &mut Image)
+    {
+        let size_m = output.size().map(|x| (x - 1) as f32);
+        output.pixels_mut().for_each(|(big_pos, color)|
+        {
+            let pos = big_pos.map(|x| x as f32) / size_m;
+
+            *color = Self::select_color(self.color_slider, pos.x, pos.y);
+        });
+    }
+
+    fn draw_selector1d_image(&self, output: &mut Image)
+    {
+        let size_m = output.size().map(|x| (x - 1) as f32);
+        output.pixels_mut().for_each(|(big_pos, color)|
+        {
+            let pos = big_pos.map(|x| x as f32) / size_m;
+
+            *color = Self::select_color(pos.y, 1.0, 1.0);
+        });
+    }
+
+    fn draw_ui_element<F>(&self, element: &ElementId, texture: TextureId, f: F)
+    where
+        F: FnOnce(&mut Image)
+    {
+        let size = self.ui.pixels_size(element).map(|x| x as usize);
+        let mut main_surface = Image::repeat(size.x, size.y, Color{r: 0, g: 0, b: 0, a: 0});
+
+        f(&mut main_surface);
+
+        self.assets.borrow_mut().update_texture(texture, &main_surface);
     }
 
     pub fn draw(&mut self)
     {
-        let size = self.ui.pixels_size(&self.ui_group.main_screen).map(|x| x as usize);
-        let mut main_surface = Image::repeat(size.x, size.y, Color{r: 0, g: 0, b: 0, a: 0});
+        self.draw_ui_element(&self.ui_group.main_screen, self.ui_group.main_texture, |image|
+        {
+            self.draw_main_image(image);
+        });
 
-        self.draw_main_image(&mut main_surface);
+        self.draw_ui_element(
+            &self.ui_group.selector_2d,
+            self.ui_group.selector_2d_texture,
+            |image|
+            {
+                self.draw_selector2d_image(image);
+            });
 
-        self.assets.borrow_mut().update_texture(self.ui_group.main_texture, &main_surface);
+        self.draw_ui_element(
+            &self.ui_group.selector_1d,
+            self.ui_group.selector_1d_texture,
+            |image|
+            {
+                self.draw_selector1d_image(image);
+            });
 
         self.ui.draw();
     }
@@ -297,12 +398,15 @@ impl DrawerWindow
         {
             if let Some(position) = self.mouse_image()
             {
-                self.image[position] = Color::RGB(255, 0, 0);
+                self.image[position] = self.draw_color;
+            } else if let Some(position) = self.mouse_inside(&self.ui_group.selector_1d)
+            {
+                self.color_slider = position.y;
             }
         }
     }
 
-    fn mouse_image(&self) -> Option<Point2<usize>>
+    fn mouse_inside(&self, element: &ElementId) -> Option<Point2<f32>>
     {
         let window_size = self.window.borrow().window_size().map(|x| x as f32);
         let mouse_position = self.mouse_position.map(|x| x as f32) / window_size;
@@ -312,12 +416,18 @@ impl DrawerWindow
             ..mouse_position
         };
 
-        let mouse_inside = self.ui.get(&self.ui_group.main_screen)
-            .borrow().element()
-            .inside_position(mouse_position);
+        self.ui.get(element)
+            .borrow()
+            .element()
+            .inside_position(mouse_position)
+    }
 
-        let size = self.ui.pixels_size(&self.ui_group.main_screen).map(|x| x as f32);
-        mouse_inside.map(|pos|
+    fn mouse_image(&self) -> Option<Point2<usize>>
+    {
+        let element = &self.ui_group.main_screen;
+
+        let size = self.ui.pixels_size(element).map(|x| x as f32);
+        self.mouse_inside(element).map(|pos|
         {
             let flipped_pos = Point2{
                 y: 1.0 - pos.y,
@@ -524,6 +634,16 @@ impl Image
         self.data.iter().enumerate().map(|(index, c)|
         {
             (self.index_to_pos(index), c)
+        })
+    }
+
+    #[allow(dead_code)]
+    pub fn pixels_mut(&mut self) -> impl Iterator<Item=(Point2<usize>, &mut Color)> + '_
+    {
+        let width = self.width;
+        self.data.iter_mut().enumerate().map(move |(index, c)|
+        {
+            (Self::index_to_pos_assoc(width, index), c)
         })
     }
 
