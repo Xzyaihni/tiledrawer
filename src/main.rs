@@ -401,7 +401,14 @@ impl DrawerWindow
                 self.image[position] = self.draw_color;
             } else if let Some(position) = self.mouse_inside(&self.ui_group.selector_1d)
             {
-                self.color_slider = position.y;
+                self.color_slider = 1.0 - position.y;
+            } else if let Some(position) = self.mouse_inside(&self.ui_group.selector_2d)
+            {
+                self.draw_color = Self::select_color(
+                    self.color_slider,
+                    position.x,
+                    1.0 - position.y
+                );
             }
         }
     }
