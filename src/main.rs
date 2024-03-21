@@ -154,6 +154,7 @@ struct UiGroup
 {
     pub main_texture: TextureId,
     pub main_screen: ElementId,
+    pub selected_color: TextureId,
     pub selector_2d_texture: TextureId,
     pub selector_2d: ElementId,
     pub selector_1d_texture: TextureId,
@@ -236,11 +237,12 @@ impl DrawerWindow
 
         let color_selector = ui.push(element);
 
+        let selected_part = 0.1;
         let div = 0.9;
         let element = UiElement{
             kind: UiElementType::Panel,
-            pos: Point2{x: 0.0, y: 0.0},
-            size: Point2{x: div, y: 1.0},
+            pos: Point2{x: 0.0, y: selected_part},
+            size: Point2{x: div, y: 1.0 - selected_part},
             texture: Some(selector_2d_texture)
         };
 
@@ -248,16 +250,30 @@ impl DrawerWindow
 
         let element = UiElement{
             kind: UiElementType::Panel,
-            pos: Point2{x: div, y: 0.0},
-            size: Point2{x: 1.0 - div, y: 1.0},
+            pos: Point2{x: div, y: selected_part},
+            size: Point2{x: 1.0 - div, y: 1.0 - selected_part},
             texture: Some(selector_1d_texture)
         };
 
         let selector_1d = ui.push_child(&color_selector, element);
 
+        let draw_color = Color{r: 0, g: 0, b: 0, a: 255};
+        let color_image = Image::repeat(1, 1, draw_color);
+        let selected_color = assets.borrow_mut().add_texture(&color_image);
+
+        let element = UiElement{
+            kind: UiElementType::Panel,
+            pos: Point2{x: 0.0, y: 0.0},
+            size: Point2{x: 1.0, y: selected_part},
+            texture: Some(selected_color)
+        };
+
+        ui.push_child(&color_selector, element);
+
         let ui_group = UiGroup{
             main_texture,
             main_screen,
+            selected_color,
             selector_2d_texture,
             selector_2d,
             selector_1d_texture,
@@ -275,7 +291,7 @@ impl DrawerWindow
             color_slider: 0.0,
             billinear,
             mouse_position: Point2{x: 0, y: 0},
-            draw_color: Color{r: 0, g: 0, b: 0, a: 255},
+            draw_color,
             draw_held: false,
             minus_held: false,
             plus_held: false
@@ -374,6 +390,9 @@ impl DrawerWindow
             {
                 self.draw_selector1d_image(image);
             });
+
+        let image = Image::repeat(1, 1, self.draw_color);
+        self.assets.borrow_mut().update_texture(self.ui_group.selected_color, &image);
 
         self.ui.draw();
     }
