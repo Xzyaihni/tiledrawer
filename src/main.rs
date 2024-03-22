@@ -8,7 +8,8 @@ use std::{
     fmt::Display,
     path::Path,
     time::Duration,
-    ops::{Index, IndexMut}
+    collections::VecDeque,
+    ops::{Index, IndexMut, Deref, DerefMut}
 };
 
 use sdl2::{
@@ -161,12 +162,67 @@ struct UiGroup
     pub selector_1d: ElementId
 }
 
+const UNDO_LIMIT: usize = 20;
+
+struct DrawImage
+{
+    image: Image,
+    // pretty inefficient i guess, but its easier that way
+    undos: VecDeque<Image>
+}
+
+impl DrawImage
+{
+    pub fn new(image: Image) -> Self
+    {
+        let undos = vec![image.clone()].into();
+
+        Self{image, undos}
+    }
+
+    pub fn add_undo(&mut self)
+    {
+        if self.undos.len() > UNDO_LIMIT
+        {
+            self.undos.pop_front();
+        }
+
+        self.undos.push_back(self.image.clone());
+    }
+
+    pub fn undo(&mut self)
+    {
+        if let Some(previous) = self.undos.pop_back()
+        {
+            self.image = previous;
+        }
+    }
+}
+
+impl Deref for DrawImage
+{
+    type Target = Image;
+
+    fn deref(&self) -> &Self::Target
+    {
+        &self.image
+    }
+}
+
+impl DerefMut for DrawImage
+{
+    fn deref_mut(&mut self) -> &mut Self::Target
+    {
+        &mut self.image
+    }
+}
+
 struct DrawerWindow
 {
     events: EventPump,
     window: Rc<RefCell<WindowWrapper>>,
     assets: Rc<RefCell<Assets>>,
-    image: Image,
+    image: DrawImage,
     ui: Ui,
     ui_group: UiGroup,
     scale: f32,
@@ -174,6 +230,7 @@ struct DrawerWindow
     billinear: bool,
     mouse_position: Point2<i32>,
     draw_color: Color,
+    previous_draw: Option<Point2<i32>>,
     draw_held: bool,
     minus_held: bool,
     plus_held: bool
@@ -194,7 +251,7 @@ impl DrawerWindow
         let height = image.height as u32 * 5 * scale_r;
 
         let window = video
-            .window("imagedisplay thingy!", width, height)
+            .window("cool drawer", width, height)
             .resizable()
             .build()
             .unwrap();
@@ -237,12 +294,19 @@ impl DrawerWindow
 
         let color_selector = ui.push(element);
 
+        let padding = Point2{
+            x: 0.02,
+            y: 0.02
+        };
+
+        let half_pad = padding / 2.0;
+
         let selected_part = 0.1;
         let div = 0.9;
         let element = UiElement{
             kind: UiElementType::Panel,
-            pos: Point2{x: 0.0, y: selected_part},
-            size: Point2{x: div, y: 1.0 - selected_part},
+            pos: Point2{x: 0.0, y: selected_part + half_pad.y},
+            size: Point2{x: div - half_pad.y, y: 1.0 - selected_part - half_pad.y},
             texture: Some(selector_2d_texture)
         };
 
@@ -250,8 +314,8 @@ impl DrawerWindow
 
         let element = UiElement{
             kind: UiElementType::Panel,
-            pos: Point2{x: div, y: selected_part},
-            size: Point2{x: 1.0 - div, y: 1.0 - selected_part},
+            pos: Point2{x: div + half_pad.x, y: selected_part + half_pad.y},
+            size: Point2{x: 1.0 - div - half_pad.y, y: 1.0 - selected_part - half_pad.y},
             texture: Some(selector_1d_texture)
         };
 
@@ -264,7 +328,7 @@ impl DrawerWindow
         let element = UiElement{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: 0.0},
-            size: Point2{x: 1.0, y: selected_part},
+            size: Point2{x: 1.0, y: selected_part - half_pad.y},
             texture: Some(selected_color)
         };
 
@@ -284,7 +348,7 @@ impl DrawerWindow
             events,
             window,
             assets,
-            image,
+            image: DrawImage::new(image),
             ui,
             ui_group,
             scale,
@@ -292,6 +356,7 @@ impl DrawerWindow
             billinear,
             mouse_position: Point2{x: 0, y: 0},
             draw_color,
+            previous_draw: None,
             draw_held: false,
             minus_held: false,
             plus_held: false
@@ -417,7 +482,16 @@ impl DrawerWindow
         {
             if let Some(position) = self.mouse_image()
             {
-                self.image[position] = self.draw_color;
+                if let Some(previous) = self.previous_draw
+                {
+                    self.image.line_overflowing(previous, position, self.draw_color);
+                } else
+                {
+                    let pos = self.image.overflowing_pos(position);
+                    self.image[pos] = self.draw_color;
+                }
+
+                self.previous_draw = Some(position);
             } else if let Some(position) = self.mouse_inside(&self.ui_group.selector_1d)
             {
                 self.color_slider = position.y;
@@ -451,18 +525,17 @@ impl DrawerWindow
             })
     }
 
-    fn mouse_image(&self) -> Option<Point2<usize>>
+    fn mouse_image(&self) -> Option<Point2<i32>>
     {
         let element = &self.ui_group.main_screen;
 
         let size = self.ui.pixels_size(element).map(|x| x as f32);
         self.mouse_inside(element).map(|pos|
         {
-            (pos * size).zip(self.image.size())
-                .map(|(mouse, size)|
-                {
-                    (mouse as f32 * self.scale).round() as usize % size
-                })
+            (pos * size).map(|mouse|
+            {
+                (mouse as f32 * self.scale).round() as i32
+            })
         })
     }
 
@@ -478,6 +551,10 @@ impl DrawerWindow
                 match event
                 {
                     Event::Quit{..} => return,
+                    Event::KeyDown{keycode: Some(Keycode::Z), ..} =>
+                    {
+                        self.image.undo();
+                    },
                     Event::KeyDown{keycode: Some(Keycode::Minus), ..} =>
                     {
                         self.minus_held = true;
@@ -496,10 +573,12 @@ impl DrawerWindow
                     },
                     Event::MouseButtonDown{mouse_btn: MouseButton::Left, ..} =>
                     {
+                        self.image.add_undo();
                         self.draw_held = true;
                     },
                     Event::MouseButtonUp{mouse_btn: MouseButton::Left, ..} =>
                     {
+                        self.previous_draw = None;
                         self.draw_held = false;
                     },
                     Event::MouseMotion{x, y, ..} =>
@@ -530,6 +609,7 @@ const BPV: usize = 1;
 // bytes per pixel
 const BPP: usize = VPP * BPV;
 
+#[derive(Debug, Clone)]
 pub struct Image
 {
     data: Vec<Color>,
@@ -556,6 +636,63 @@ impl Image
 
             Rgba([rgba.r, rgba.g, rgba.b, rgba.a])
         }).save(path)
+    }
+
+    pub fn line_overflowing(&mut self, mut start: Point2<i32>, end: Point2<i32>, c: Color)
+    {
+        let change = (end - start).map(|x| x.abs());
+        let change = Point2{
+            y: -change.y,
+            ..change
+        };
+
+        let slope: Point2<i32> = start.zip(end).map(|(s, e)|
+        {
+            if s < e
+            {
+                1
+            } else
+            {
+                -1
+            }
+        });
+
+        let mut error = change.x + change.y;
+
+        loop
+        {
+            *self.get_overflowing_mut(start) = c;
+
+            if start == end
+            {
+                break;
+            }
+
+            let e2 = error * 2;
+            if e2 >= change.y
+            {
+                if start.x == end.x
+                {
+                    break;
+                }
+
+                error += change.y;
+
+                start.x += slope.x;
+            }
+
+            if e2 <= change.x
+            {
+                if start.y == end.y
+                {
+                    break;
+                }
+
+                error += change.x;
+
+                start.y += slope.y;
+            }
+        }
     }
 
     pub fn get_billinear_saturating(&self, point: Point2<f32>) -> Color
@@ -627,16 +764,14 @@ impl Image
         }
     }
 
-    pub fn get_saturating(&self, pos: Point2<i32>) -> Color
+    fn saturating_pos(&self, pos: Point2<i32>) -> Point2<usize>
     {
-        let pos = pos.zip(self.size()).map(|(x, size)| x.clamp(0, size as i32 - 1) as usize);
-
-        self[pos]
+        pos.zip(self.size()).map(|(x, size)| x.clamp(0, size as i32 - 1) as usize)
     }
 
-    pub fn get_overflowing(&self, pos: Point2<i32>) -> Color
+    fn overflowing_pos(&self, pos: Point2<i32>) -> Point2<usize>
     {
-        let pos = pos.zip(self.size()).map(|(x, size)|
+        pos.zip(self.size()).map(|(x, size)|
         {
             let x = x % size as i32;
 
@@ -647,9 +782,29 @@ impl Image
             {
                 x
             }) as usize
-        });
+        })
+    }
 
-        self[pos]
+    pub fn get_saturating(&self, pos: Point2<i32>) -> Color
+    {
+        self[self.saturating_pos(pos)]
+    }
+
+    pub fn get_overflowing(&self, pos: Point2<i32>) -> Color
+    {
+        self[self.overflowing_pos(pos)]
+    }
+
+    pub fn get_saturating_mut(&mut self, pos: Point2<i32>) -> &mut Color
+    {
+        let pos = self.saturating_pos(pos);
+        &mut self[pos]
+    }
+
+    pub fn get_overflowing_mut(&mut self, pos: Point2<i32>) -> &mut Color
+    {
+        let pos = self.overflowing_pos(pos);
+        &mut self[pos]
     }
 
     #[allow(dead_code)]
