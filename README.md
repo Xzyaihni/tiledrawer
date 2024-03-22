@@ -5,7 +5,7 @@
 git clone https://github.com/Xzyaihni/tiledrawer
 cd tiledrawer
 cargo b -r
-./target/tiledrawer
+./target/release/tiledrawer
 ```
 
 # controls
