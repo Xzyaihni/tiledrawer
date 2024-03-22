@@ -217,13 +217,14 @@ impl DerefMut for DrawImage
     }
 }
 
+#[derive(Debug, Clone)]
 enum ControlRaw
 {
     Keyboard(Keycode),
     Mouse(MouseButton)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Control
 {
     Draw = 0,
@@ -234,7 +235,7 @@ enum Control
     Last
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State
 {
     Pressed,
@@ -317,6 +318,7 @@ struct DrawerWindow
     billinear: bool,
     mouse_position: Point2<i32>,
     draw_color: Color,
+    erase_color: Color,
     previous_draw: Option<Point2<i32>>,
     controls: Controls
 }
@@ -441,6 +443,7 @@ impl DrawerWindow
             billinear,
             mouse_position: Point2{x: 0, y: 0},
             draw_color,
+            erase_color: Color{r: 0, g: 0, b: 0, a: 0},
             previous_draw: None,
             controls: Controls::new()
         }
@@ -460,7 +463,7 @@ impl DrawerWindow
                 a as f32 * self.scale
             });
 
-            *color = if self.billinear
+            let new_color = if self.billinear
             {
                 let pos = pos.zip(self.image.size()).map(|(a, b)| a % b as f32);
 
@@ -469,6 +472,16 @@ impl DrawerWindow
             {
                 self.image[pos.zip(self.image.size()).map(|(a, b)| a.round() as usize % b)]
             };
+
+            let transparency = if (big_pos.x + big_pos.y % 2) % 2 == 0
+            {
+                Color{r: 255, g: 255, b: 255, a: 255}
+            } else
+            {
+                Color{r: 0, g: 0, b: 0, a: 255}
+            };
+
+            *color = Image::lerp(transparency, new_color, new_color.a as f32 / 255.0);
         });
     }
 
@@ -561,27 +574,37 @@ impl DrawerWindow
             self.scale *= 1.0 + speed * dt;
         }
 
-        if self.controls.is_down(Control::Draw)
+        let draw_with = |this: &mut Self, color|
         {
-            if let Some(position) = self.mouse_image()
+            if let Some(position) = this.mouse_image()
             {
-                if let Some(previous) = self.previous_draw
+                if let Some(previous) = this.previous_draw
                 {
-                    self.image.line_overflowing(previous, position, self.draw_color);
+                    this.image.line_overflowing(previous, position, color);
                 } else
                 {
-                    let pos = self.image.overflowing_pos(position);
-                    self.image[pos] = self.draw_color;
+                    let pos = this.image.overflowing_pos(position);
+                    this.image[pos] = color;
                 }
 
-                self.previous_draw = Some(position);
-            } else if let Some(position) = self.mouse_inside(&self.ui_group.selector_1d)
+                this.previous_draw = Some(position);
+            }
+        };
+
+        if self.controls.is_down(Control::Draw)
+        {
+            draw_with(self, self.draw_color);
+
+            if let Some(position) = self.mouse_inside(&self.ui_group.selector_1d)
             {
                 self.color_slider = position.y;
             } else if let Some(position) = self.mouse_inside(&self.ui_group.selector_2d)
             {
                 self.draw_color = Self::select_color(self.color_slider, position.x, position.y);
             }
+        } else if self.controls.is_down(Control::Erase)
+        {
+            draw_with(self, self.erase_color);
         }
     }
 
@@ -629,6 +652,34 @@ impl DrawerWindow
 
         loop
         {
+            let mut on_down = |control|
+            {
+                match control
+                {
+                    Control::Undo =>
+                    {
+                        self.image.undo();
+                    },
+                    Control::Draw | Control::Erase =>
+                    {
+                        self.image.add_undo();
+                    },
+                    _ => ()
+                }
+            };
+
+            let mut on_up = |control|
+            {
+                match control
+                {
+                    Control::Draw | Control::Erase =>
+                    {
+                        self.previous_draw = None;
+                    },
+                    _ => ()
+                }
+            };
+
             for event in self.events.poll_iter()
             {
                 match event
@@ -636,34 +687,44 @@ impl DrawerWindow
                     Event::Quit{..} => return,
                     Event::KeyDown{keycode: Some(key), ..} =>
                     {
-                        if key == Keycode::Z
+                        let key = ControlRaw::Keyboard(key);
+
+                        if let Some(key) = Controls::key_to_control(key.clone())
                         {
-                            self.image.undo();
+                            on_down(key);
                         }
 
-                        self.controls.set_down(ControlRaw::Keyboard(key));
+                        self.controls.set_down(key);
                     },
                     Event::KeyUp{keycode: Some(key), ..} =>
                     {
-                        self.controls.set_up(ControlRaw::Keyboard(key));
+                        let key = ControlRaw::Keyboard(key);
+                        if let Some(key) = Controls::key_to_control(key.clone())
+                        {
+                            on_up(key);
+                        }
+
+                        self.controls.set_up(key);
                     },
                     Event::MouseButtonDown{mouse_btn: button, ..} =>
                     {
-                        if button == MouseButton::Left
+                        let key = ControlRaw::Mouse(button);
+                        if let Some(key) = Controls::key_to_control(key.clone())
                         {
-                            self.image.add_undo();
+                            on_down(key);
                         }
 
-                        self.controls.set_down(ControlRaw::Mouse(button));
+                        self.controls.set_down(key);
                     },
                     Event::MouseButtonUp{mouse_btn: button, ..} =>
                     {
-                        if button == MouseButton::Left
+                        let key = ControlRaw::Mouse(button);
+                        if let Some(key) = Controls::key_to_control(key.clone())
                         {
-                            self.previous_draw = None;
+                            on_up(key);
                         }
 
-                        self.controls.set_up(ControlRaw::Mouse(button));
+                        self.controls.set_up(key);
                     },
                     Event::MouseMotion{x, y, ..} =>
                     {
