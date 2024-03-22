@@ -358,7 +358,7 @@ impl Ui
 
     pub fn click(&self, pos: Point2<f32>) -> Option<UiEvent>
     {
-        match self.try_for_each_element(|id, element|
+        let flow = self.try_for_each_element(|id, element|
         {
             match element.inner.kind
             {
@@ -373,7 +373,9 @@ impl Ui
             }
 
             ControlFlow::Continue(())
-        })
+        });
+
+        match flow
         {
             ControlFlow::Break(x) => Some(x),
             ControlFlow::Continue(_) => None
