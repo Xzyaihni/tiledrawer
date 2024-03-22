@@ -18,7 +18,7 @@ use sdl2::{
     mouse::MouseButton,
     keyboard::Keycode,
     render::{Canvas, Texture, TextureCreator, BlendMode},
-    pixels::PixelFormatEnum,
+    pixels::{PixelFormatEnum, Color as SdlColor},
     event::Event,
     video::{Window, WindowContext}
 };
@@ -274,20 +274,32 @@ impl Controls
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_down(&mut self, key: ControlRaw)
     {
         if let Some(control) = Self::key_to_control(key)
         {
-            *self.control_mut(control) = State::Pressed;
+            self.set_control_down(control);
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_up(&mut self, key: ControlRaw)
     {
         if let Some(control) = Self::key_to_control(key)
         {
-            *self.control_mut(control) = State::Released;
+            self.set_control_up(control);
         }
+    }
+
+    pub fn set_control_down(&mut self, control: Control)
+    {
+        *self.control_mut(control) = State::Pressed;
+    }
+
+    pub fn set_control_up(&mut self, control: Control)
+    {
+        *self.control_mut(control) = State::Released;
     }
 
     fn key_to_control(key: ControlRaw) -> Option<Control>
@@ -357,6 +369,7 @@ struct DrawerWindow
     mouse_position: Point2<i32>,
     draw_color: Color,
     erase_color: Color,
+    needs_redraw: bool,
     previous_draw: Option<Point2<i32>>,
     controls: Controls
 }
@@ -482,6 +495,7 @@ impl DrawerWindow
             mouse_position: Point2{x: 0, y: 0},
             draw_color,
             erase_color: Color{r: 0, g: 0, b: 0, a: 0},
+            needs_redraw: true,
             previous_draw: None,
             controls: Controls::new()
         }
@@ -511,6 +525,7 @@ impl DrawerWindow
                 self.image[pos.zip(self.image.size()).map(|(a, b)| a.round() as usize % b)]
             };
 
+            // just arbitrary numberse kinda lol
             let t_pos = if self.scale > 1.0
             {
                 big_pos
@@ -707,31 +722,41 @@ impl DrawerWindow
 
         loop
         {
-            let mut on_down = |control|
+            let mut on_control = |control, state|
             {
-                match control
+                match state
                 {
-                    Control::Undo =>
-                    {
-                        self.image.undo();
-                    },
-                    Control::Draw | Control::Erase =>
-                    {
-                        self.image.add_undo();
-                    },
-                    _ => ()
-                }
-            };
+                    State::Pressed => {
+                        match control
+                        {
+                            Control::Undo =>
+                            {
+                                self.image.undo();
+                            },
+                            Control::Draw | Control::Erase =>
+                            {
+                                self.image.add_undo();
+                            },
+                            _ => ()
+                        }
 
-            let mut on_up = |control|
-            {
-                match control
-                {
-                    Control::Draw | Control::Erase =>
-                    {
-                        self.previous_draw = None;
+                        self.controls.set_control_down(control);
+
+                        self.needs_redraw = true;
                     },
-                    _ => ()
+                    State::Released =>
+                    {
+                        match control
+                        {
+                            Control::Draw | Control::Erase =>
+                            {
+                                self.previous_draw = None;
+                            },
+                            _ => ()
+                        }
+
+                        self.controls.set_control_up(control);
+                    }
                 }
             };
 
@@ -742,44 +767,31 @@ impl DrawerWindow
                     Event::Quit{..} => return,
                     Event::KeyDown{keycode: Some(key), repeat: false, ..} =>
                     {
-                        let key = ControlRaw::Keyboard(key);
-
-                        if let Some(key) = Controls::key_to_control(key.clone())
+                        if let Some(key) = Controls::key_to_control(ControlRaw::Keyboard(key))
                         {
-                            on_down(key);
+                            on_control(key, State::Pressed);
                         }
-
-                        self.controls.set_down(key);
                     },
                     Event::KeyUp{keycode: Some(key), repeat: false, ..} =>
                     {
-                        let key = ControlRaw::Keyboard(key);
-                        if let Some(key) = Controls::key_to_control(key.clone())
+                        if let Some(key) = Controls::key_to_control(ControlRaw::Keyboard(key))
                         {
-                            on_up(key);
+                            on_control(key, State::Released);
                         }
-
-                        self.controls.set_up(key);
                     },
                     Event::MouseButtonDown{mouse_btn: button, ..} =>
                     {
-                        let key = ControlRaw::Mouse(button);
-                        if let Some(key) = Controls::key_to_control(key.clone())
+                        if let Some(key) = Controls::key_to_control(ControlRaw::Mouse(button))
                         {
-                            on_down(key);
+                            on_control(key, State::Pressed);
                         }
-
-                        self.controls.set_down(key);
                     },
                     Event::MouseButtonUp{mouse_btn: button, ..} =>
                     {
-                        let key = ControlRaw::Mouse(button);
-                        if let Some(key) = Controls::key_to_control(key.clone())
+                        if let Some(key) = Controls::key_to_control(ControlRaw::Mouse(button))
                         {
-                            on_up(key);
+                            on_control(key, State::Released);
                         }
-
-                        self.controls.set_up(key);
                     },
                     Event::MouseMotion{x, y, ..} =>
                     {
@@ -789,13 +801,28 @@ impl DrawerWindow
                 }
             }
 
-            self.update(dt);
+            if self.controls.is_down(Control::Draw) || self.controls.is_down(Control::Erase)
+            {
+                self.needs_redraw = true;
+            }
 
-            self.canvas_mut().clear();
+            if self.needs_redraw
+            {
+                self.update(dt);
 
-            self.draw();
+                {
+                    let mut canvas = self.canvas_mut();
 
-            self.canvas_mut().present();
+                    canvas.set_draw_color(SdlColor{r: 255, g: 255, b: 255, a: 255});
+                    canvas.clear();
+                }
+
+                self.draw();
+
+                self.canvas_mut().present();
+
+                self.needs_redraw = false;
+            }
 
             thread::sleep(Duration::from_millis(1000 / fps));
         }
