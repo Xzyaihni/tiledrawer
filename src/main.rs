@@ -283,7 +283,7 @@ impl Controls
     {
         match key
         {
-            ControlRaw::Keyboard(Keycode::Plus) => Some(Control::ZoomIn),
+            ControlRaw::Keyboard(Keycode::Equals) => Some(Control::ZoomIn),
             ControlRaw::Keyboard(Keycode::Minus) => Some(Control::ZoomOut),
             ControlRaw::Keyboard(Keycode::Z) => Some(Control::Undo),
             ControlRaw::Mouse(MouseButton::Left) => Some(Control::Draw),
