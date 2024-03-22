@@ -305,6 +305,33 @@ impl Controls
     }
 }
 
+struct Hsv
+{
+    pub h: f32,
+    pub s: f32,
+    pub v: f32
+}
+
+impl From<Hsv> for Color
+{
+    fn from(hsv: Hsv) -> Self
+    {
+        let t = |v: f32|
+        {
+            (v * 255.0) as u8
+        };
+
+        let f = |n: f32| -> u8
+        {
+            let k = (n + hsv.h / 60.0) % 6.0;
+
+            t(hsv.v - hsv.v * hsv.s * (k.min(4.0 - k)).clamp(0.0, 1.0))
+        };
+
+        Color{r: f(5.0), g: f(3.0), b: f(1.0), a: 255}
+    }
+}
+
 struct DrawerWindow
 {
     events: EventPump,
@@ -491,12 +518,11 @@ impl DrawerWindow
 
     fn select_color(x: f32, y: f32, z: f32) -> Color
     {
-        let f = |a|
-        {
-            (a * 255.0) as u8
-        };
-
-        Color{r: f(x), g: f(y), b: f(z), a: 255}
+        Hsv{
+            h: x * 360.0,
+            s: y,
+            v: 1.0 - z
+        }.into()
     }
 
     fn draw_selector2d_image(&self, output: &mut Image)
@@ -517,7 +543,7 @@ impl DrawerWindow
         {
             let pos = big_pos.map(|x| x as f32) / size_m;
 
-            *color = Self::select_color(pos.y, 1.0, 1.0);
+            *color = Self::select_color(pos.y, 1.0, 0.0);
         });
     }
 
