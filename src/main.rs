@@ -19,7 +19,7 @@ use sdl2::{
     keyboard::Keycode,
     render::{Canvas, Texture, TextureCreator, BlendMode},
     pixels::{PixelFormatEnum, Color as SdlColor},
-    event::Event,
+    event::{WindowEvent, Event},
     video::{Window, WindowContext}
 };
 
@@ -722,6 +722,8 @@ impl DrawerWindow
 
         loop
         {
+            let mut special_event = false;
+
             let mut on_control = |control, state|
             {
                 match state
@@ -797,8 +799,27 @@ impl DrawerWindow
                     {
                         self.mouse_position = Point2{x, y};
                     },
+                    Event::Window{win_event, ..} =>
+                    {
+                        match win_event
+                        {
+                            WindowEvent::SizeChanged(..)
+                                | WindowEvent::FocusGained
+                                | WindowEvent::Exposed =>
+                            {
+                                special_event = true;
+                            },
+                            _ => ()
+                        }
+                    },
                     _ => ()
                 }
+            }
+
+            // i hate the borrow checker
+            if special_event
+            {
+                self.needs_redraw = true;
             }
 
             if self.controls.is_down(Control::Draw) || self.controls.is_down(Control::Erase)
