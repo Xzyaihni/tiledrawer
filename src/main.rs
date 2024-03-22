@@ -217,6 +217,93 @@ impl DerefMut for DrawImage
     }
 }
 
+enum ControlRaw
+{
+    Keyboard(Keycode),
+    Mouse(MouseButton)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Control
+{
+    Draw = 0,
+    Erase,
+    ZoomOut,
+    ZoomIn,
+    Undo,
+    Last
+}
+
+#[derive(Debug, Clone, Copy)]
+enum State
+{
+    Pressed,
+    Released
+}
+
+struct Controls
+{
+    states: Vec<State>
+}
+
+impl Controls
+{
+    pub fn new() -> Self
+    {
+        Self{states: vec![State::Released; Control::Last as usize]}
+    }
+
+    pub fn is_down(&self, control: Control) -> bool
+    {
+        match self.control(control)
+        {
+            State::Pressed => true,
+            _ => false
+        }
+    }
+
+    pub fn set_down(&mut self, key: ControlRaw)
+    {
+        if let Some(control) = Self::key_to_control(key)
+        {
+            *self.control_mut(control) = State::Pressed;
+        }
+    }
+
+    pub fn set_up(&mut self, key: ControlRaw)
+    {
+        if let Some(control) = Self::key_to_control(key)
+        {
+            *self.control_mut(control) = State::Released;
+        }
+    }
+
+    fn key_to_control(key: ControlRaw) -> Option<Control>
+    {
+        match key
+        {
+            ControlRaw::Keyboard(Keycode::Plus) => Some(Control::ZoomIn),
+            ControlRaw::Keyboard(Keycode::Minus) => Some(Control::ZoomOut),
+            ControlRaw::Keyboard(Keycode::Z) => Some(Control::Undo),
+            ControlRaw::Mouse(MouseButton::Left) => Some(Control::Draw),
+            // my right mouse button is broken lmao
+            ControlRaw::Mouse(MouseButton::Right)
+                | ControlRaw::Keyboard(Keycode::V) => Some(Control::Erase),
+            _ => None
+        }
+    }
+
+    fn control(&self, control: Control) -> &State
+    {
+        &self.states[control as usize]
+    }
+
+    fn control_mut(&mut self, control: Control) -> &mut State
+    {
+        &mut self.states[control as usize]
+    }
+}
+
 struct DrawerWindow
 {
     events: EventPump,
@@ -231,9 +318,7 @@ struct DrawerWindow
     mouse_position: Point2<i32>,
     draw_color: Color,
     previous_draw: Option<Point2<i32>>,
-    draw_held: bool,
-    minus_held: bool,
-    plus_held: bool
+    controls: Controls
 }
 
 impl DrawerWindow
@@ -357,9 +442,7 @@ impl DrawerWindow
             mouse_position: Point2{x: 0, y: 0},
             draw_color,
             previous_draw: None,
-            draw_held: false,
-            minus_held: false,
-            plus_held: false
+            controls: Controls::new()
         }
     }
 
@@ -470,15 +553,15 @@ impl DrawerWindow
     pub fn update(&mut self, dt: f32)
     {
         let speed = 1.0;
-        if self.plus_held
+        if self.controls.is_down(Control::ZoomIn)
         {
             self.scale *= 1.0 - speed * dt;
-        } else if self.minus_held
+        } else if self.controls.is_down(Control::ZoomOut)
         {
             self.scale *= 1.0 + speed * dt;
         }
 
-        if self.draw_held
+        if self.controls.is_down(Control::Draw)
         {
             if let Some(position) = self.mouse_image()
             {
@@ -551,35 +634,36 @@ impl DrawerWindow
                 match event
                 {
                     Event::Quit{..} => return,
-                    Event::KeyDown{keycode: Some(Keycode::Z), ..} =>
+                    Event::KeyDown{keycode: Some(key), ..} =>
                     {
-                        self.image.undo();
+                        if key == Keycode::Z
+                        {
+                            self.image.undo();
+                        }
+
+                        self.controls.set_down(ControlRaw::Keyboard(key));
                     },
-                    Event::KeyDown{keycode: Some(Keycode::Minus), ..} =>
+                    Event::KeyUp{keycode: Some(key), ..} =>
                     {
-                        self.minus_held = true;
+                        self.controls.set_up(ControlRaw::Keyboard(key));
                     },
-                    Event::KeyUp{keycode: Some(Keycode::Minus), ..} =>
+                    Event::MouseButtonDown{mouse_btn: button, ..} =>
                     {
-                        self.minus_held = false;
+                        if button == MouseButton::Left
+                        {
+                            self.image.add_undo();
+                        }
+
+                        self.controls.set_down(ControlRaw::Mouse(button));
                     },
-                    Event::KeyDown{keycode: Some(Keycode::Equals), ..} =>
+                    Event::MouseButtonUp{mouse_btn: button, ..} =>
                     {
-                        self.plus_held = true;
-                    },
-                    Event::KeyUp{keycode: Some(Keycode::Equals), ..} =>
-                    {
-                        self.plus_held = false;
-                    },
-                    Event::MouseButtonDown{mouse_btn: MouseButton::Left, ..} =>
-                    {
-                        self.image.add_undo();
-                        self.draw_held = true;
-                    },
-                    Event::MouseButtonUp{mouse_btn: MouseButton::Left, ..} =>
-                    {
-                        self.previous_draw = None;
-                        self.draw_held = false;
+                        if button == MouseButton::Left
+                        {
+                            self.previous_draw = None;
+                        }
+
+                        self.controls.set_up(ControlRaw::Mouse(button));
                     },
                     Event::MouseMotion{x, y, ..} =>
                     {
