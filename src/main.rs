@@ -1,6 +1,7 @@
 use std::{
     env,
     mem,
+    slice,
     thread,
     process,
     rc::Rc,
@@ -17,7 +18,7 @@ use sdl2::{
     mouse::MouseButton,
     keyboard::Keycode,
     render::{Canvas, Texture, TextureCreator, BlendMode},
-    pixels::{PixelFormatEnum, Color},
+    pixels::PixelFormatEnum,
     event::Event,
     video::{Window, WindowContext}
 };
@@ -39,6 +40,16 @@ pub fn complain(message: impl Display) -> !
     println!("{message}");
 
     process::exit(1)
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Color
+{
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -500,7 +511,21 @@ impl DrawerWindow
                 self.image[pos.zip(self.image.size()).map(|(a, b)| a.round() as usize % b)]
             };
 
-            let transparency = if (big_pos.x + big_pos.y % 2) % 2 == 0
+            let t_pos = if self.scale > 1.0
+            {
+                big_pos
+            } else if self.scale > 0.5
+            {
+                big_pos / 2
+            } else if self.scale > 0.1
+            {
+                big_pos / 4
+            } else
+            {
+                big_pos / 8
+            };
+
+            let transparency = if (t_pos.x + t_pos.y % 2) % 2 == 0
             {
                 let v = 255;
 
@@ -918,12 +943,16 @@ impl Image
         }
     }
 
-    pub fn data_bytes(&self) -> Vec<u8>
+    pub fn data_bytes(&self) -> &[u8]
     {
-        self.data.iter().flat_map(|p|
-        {
-            [p.r, p.g, p.b, p.a]
-        }).collect()
+        let s: &[Color] = &self.data;
+        let s: *const Color = s.as_ptr();
+        let s = s as *const u8;
+
+        let len = self.data.len() * BPP;
+        let bytes: &[u8] = unsafe{ slice::from_raw_parts(s, len) };
+
+        bytes
     }
 
     pub fn bytes_row(&self) -> usize
