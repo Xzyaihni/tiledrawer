@@ -204,7 +204,7 @@ impl UiElementInner
 
         if let Some(child_id) = id.child.as_ref()
         {
-            this.borrow().get(&child_id)
+            this.borrow().get(child_id)
         } else
         {
             this.clone()
@@ -296,7 +296,7 @@ impl Ui
 
         if let Some(child_id) = id.child.as_ref()
         {
-            this.borrow().get(&child_id)
+            this.borrow().get(child_id)
         } else
         {
             this.clone()
@@ -350,7 +350,7 @@ impl Ui
                 let Point2{x: width, y: height} = self.pixels_size_inner(element);
 
                 self.window.borrow_mut().canvas
-                    .copy(&texture, None, Rect::new(x, y, width, height))
+                    .copy(texture, None, Rect::new(x, y, width, height))
                     .unwrap();
             }
         });

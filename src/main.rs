@@ -1,3 +1,6 @@
+#![allow(clippy::suspicious_else_formatting)]
+#![allow(clippy::match_like_matches_macro)]
+
 use std::{
     env,
     mem,
@@ -100,7 +103,7 @@ impl Assets
         let data = image.data_bytes();
         let row = image.bytes_row();
 
-        self.texture_mut(id).update(None, &data, row).unwrap();
+        self.texture_mut(id).update(None, data, row).unwrap();
     }
 
     unsafe fn texture_from_image(&self, image: &Image) -> HeldTexture
@@ -116,7 +119,7 @@ impl Assets
 
         let data = image.data_bytes();
 
-        texture.update(None, &data, image.bytes_row()).unwrap();
+        texture.update(None, data, image.bytes_row()).unwrap();
 
         HeldTexture{
             size,
@@ -129,12 +132,12 @@ impl Assets
         mem::transmute(texture)
     }
 
-    pub fn texture<'a>(&'a self, id: TextureId) -> &'a Texture<'static>
+    pub fn texture(&self, id: TextureId) -> &Texture<'static>
     {
         &self.textures[id.0].texture
     }
 
-    pub fn texture_mut<'a>(&'a mut self, id: TextureId) -> &'a mut Texture<'static>
+    pub fn texture_mut(&mut self, id: TextureId) -> &mut Texture<'static>
     {
         &mut self.textures[id.0].texture
     }
@@ -552,7 +555,15 @@ impl DrawerWindow
                 Color{r: v, g: v, b: v, a: 255}
             };
 
-            *color = Image::lerp(transparency, new_color, new_color.a as f32 / 255.0);
+            let mixed_color = if new_color.a == 255
+            {
+                new_color
+            } else
+            {
+                Image::lerp(transparency, new_color, new_color.a as f32 / 255.0)
+            };
+
+            *color = mixed_color;
         });
     }
 
@@ -710,7 +721,7 @@ impl DrawerWindow
         {
             (pos * size).map(|mouse|
             {
-                (mouse as f32 * self.scale).round() as i32
+                (mouse * self.scale).round() as i32
             })
         })
     }

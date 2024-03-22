@@ -89,11 +89,11 @@ impl Point2<f64>
     }
 }
 
-impl Into<SDLPoint> for Point2<usize>
+impl From<Point2<usize>> for SDLPoint
 {
-    fn into(self) -> SDLPoint
+    fn from(p: Point2<usize>) -> Self
     {
-        SDLPoint::new(self.x as i32, self.y as i32)
+        Self::new(p.x as i32, p.y as i32)
     }
 }
 
