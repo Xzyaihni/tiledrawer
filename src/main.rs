@@ -475,10 +475,14 @@ impl DrawerWindow
 
             let transparency = if (big_pos.x + big_pos.y % 2) % 2 == 0
             {
-                Color{r: 255, g: 255, b: 255, a: 255}
+                let v = 255;
+
+                Color{r: v, g: v, b: v, a: 255}
             } else
             {
-                Color{r: 0, g: 0, b: 0, a: 255}
+                let v = 150;
+
+                Color{r: v, g: v, b: v, a: 255}
             };
 
             *color = Image::lerp(transparency, new_color, new_color.a as f32 / 255.0);
@@ -685,7 +689,7 @@ impl DrawerWindow
                 match event
                 {
                     Event::Quit{..} => return,
-                    Event::KeyDown{keycode: Some(key), ..} =>
+                    Event::KeyDown{keycode: Some(key), repeat: false, ..} =>
                     {
                         let key = ControlRaw::Keyboard(key);
 
@@ -696,7 +700,7 @@ impl DrawerWindow
 
                         self.controls.set_down(key);
                     },
-                    Event::KeyUp{keycode: Some(key), ..} =>
+                    Event::KeyUp{keycode: Some(key), repeat: false, ..} =>
                     {
                         let key = ControlRaw::Keyboard(key);
                         if let Some(key) = Controls::key_to_control(key.clone())
