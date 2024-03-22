@@ -822,7 +822,10 @@ impl DrawerWindow
                 self.needs_redraw = true;
             }
 
-            if self.controls.is_down(Control::Draw) || self.controls.is_down(Control::Erase)
+            if self.controls.is_down(Control::Draw)
+                || self.controls.is_down(Control::Erase)
+                || self.controls.is_down(Control::ZoomIn)
+                || self.controls.is_down(Control::ZoomOut)
             {
                 self.needs_redraw = true;
             }
