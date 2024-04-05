@@ -402,7 +402,7 @@ impl DrawerWindow
         let scale: f32 = 0.25;
         let scale_r = scale.recip().round() as u32;
 
-        let width = image.width as u32 * 7 * scale_r;
+        let width = image.width as u32 * 8 * scale_r;
         let height = image.height as u32 * 5 * scale_r;
 
         let window = video
@@ -443,6 +443,7 @@ impl DrawerWindow
             controls: Controls::new()
         };
 
+        this.update_cursor();
         this.update_1d_cursor();
         this.update_2d_cursor(Point2{x: 0.0, y: 0.0});
 
@@ -473,10 +474,17 @@ impl DrawerWindow
         let selector_1d_texture = assets.borrow_mut().add_texture(&color_image);
 
         let height = 0.4;
+        let padding = Point2{
+            x: 0.015,
+            y: 0.0
+        };
+
+        let half_pad = padding / 2.0;
+
         let element = UiElement{
             kind: UiElementType::Panel,
-            pos: Point2{x: 0.0, y: 1.0 - height},
-            size: Point2{x: pos.x, y: height}.into(),
+            pos: Point2{x: 0.0 + half_pad.x, y: 1.0 - height},
+            size: Point2{x: pos.x - padding.x, y: height}.into(),
             texture: None
         };
 
@@ -524,7 +532,7 @@ impl DrawerWindow
         let empty_color = Color{r: 0, g: 0, b: 0, a: 0};
 
         let square_cursor_texture = {
-            let size = Point2{x: 16, y: 16};
+            let size = Point2{x: 8, y: 8};
 
             let mut square_cursor_image = Image::repeat(size.x, size.y, empty_color);
 
@@ -539,11 +547,38 @@ impl DrawerWindow
             assets.borrow_mut().add_texture(&square_cursor_image)
         };
 
+        let circle_cursor_texture = {
+            let size = Point2{x: 64, y: 64};
+            let thickness = 0.1;
+
+            let mut circle_cursor_image = Image::repeat(size.x, size.y, empty_color);
+
+            circle_cursor_image.pixels_mut().for_each(|(pos, pixel)|
+            {
+                let center = Point2{x: 0.5, y: 0.5};
+                let pos = pos.map(|x| x as f32) / size.map(|x| x as f32);
+
+                let pos = pos - center;
+
+                let distance = pos.x.hypot(pos.y);
+
+                let far = 0.5;
+                let near = far - thickness;
+
+                if distance > near && distance < far
+                {
+                    *pixel = Color{r: 255, g: 255, b: 255, a: 255};
+                }
+            });
+
+            assets.borrow_mut().add_texture(&circle_cursor_image)
+        };
+
         let element = UiElement{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: 0.0},
-            size: KeepAspect::from(Point2{x: 0.1, y: 0.1}).into(),
-            texture: Some(square_cursor_texture)
+            size: KeepAspect::from(Point2{x: 0.06, y: 0.06}).into(),
+            texture: Some(circle_cursor_texture)
         };
 
         let selector_2d_cursor = ui.push_child(&selector_2d, element.clone());
@@ -587,10 +622,7 @@ impl DrawerWindow
     {
         output.pixels_mut().for_each(|(big_pos, color)|
         {
-            let pos = big_pos.map(|a|
-            {
-                a as f32 * self.scale
-            });
+            let pos = big_pos.map(|a| a as f32) * self.scale;
 
             let new_color = if self.billinear
             {
@@ -723,6 +755,8 @@ impl DrawerWindow
 
     pub fn update(&mut self, dt: f32)
     {
+        self.update_cursor();
+
         let speed = 1.0;
         if self.controls.is_down(Control::ZoomIn)
         {
@@ -782,6 +816,25 @@ impl DrawerWindow
 
         cursor.set(&UiAnimatableId::PositionCenteredX, position.x);
         cursor.set(&UiAnimatableId::PositionCenteredY, 1.0 - position.y);
+    }
+
+    fn update_cursor(&mut self)
+    {
+        let mut cursor = self.ui.get(&self.ui_group.draw_cursor);
+
+        let total_size = self.ui.pixels_size(&self.ui_group.main_screen).map(|x| x as f32);
+        let min_total_size = total_size.x.min(total_size.y);
+
+        let single_pixel = min_total_size.recip() / self.scale;
+
+        cursor.set(&UiAnimatableId::ScaleX, single_pixel);
+        cursor.set(&UiAnimatableId::ScaleY, single_pixel);
+
+        if let Some(pos) = self.mouse_inside(&self.ui_group.main_screen)
+        {
+            cursor.set(&UiAnimatableId::PositionCenteredX, pos.x);
+            cursor.set(&UiAnimatableId::PositionCenteredY, 1.0 - pos.y);
+        }
     }
 
     fn mouse_inside(&self, element: &ElementId) -> Option<Point2<f32>>

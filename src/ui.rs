@@ -105,7 +105,15 @@ impl UiSize
             Self::Normal(x) => x,
             Self::KeepAspect(KeepAspect{aspect, size: p}) =>
             {
-                Point2{y: p.y * aspect * local_aspect, ..p}
+                let aspect = aspect * local_aspect;
+
+                if aspect > 1.0
+                {
+                    Point2{x: p.x / aspect, ..p}
+                } else
+                {
+                    Point2{y: p.y * aspect, ..p}
+                }
             }
         }
     }
