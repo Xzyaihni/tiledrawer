@@ -27,7 +27,8 @@ use sdl2::{
 };
 
 use image::{ImageError, RgbaImage, Rgba};
-use ui::{Ui, ElementId, UiElement, UiElementType};
+use ui::{Ui, UiAnimatableId, ElementId, UiElement, UiElementType, KeepAspect};
+use animator::Animatable;
 pub use point::Point2;
 
 use config::Config;
@@ -172,8 +173,11 @@ struct UiGroup
     pub selected_color: TextureId,
     pub selector_2d_texture: TextureId,
     pub selector_2d: ElementId,
+    pub selector_2d_cursor: ElementId,
     pub selector_1d_texture: TextureId,
-    pub selector_1d: ElementId
+    pub selector_1d: ElementId,
+    pub selector_1d_cursor: ElementId,
+    pub draw_cursor: ElementId
 }
 
 const UNDO_LIMIT: usize = 20;
@@ -181,6 +185,7 @@ const UNDO_LIMIT: usize = 20;
 struct DrawImage
 {
     image: Image,
+    needs_redraw: bool,
     // pretty inefficient i guess, but its easier that way
     undos: VecDeque<Image>
 }
@@ -191,7 +196,12 @@ impl DrawImage
     {
         let undos = vec![image.clone()].into();
 
-        Self{image, undos}
+        Self{image, needs_redraw: true, undos}
+    }
+
+    pub fn needs_redraw(&self) -> bool
+    {
+        self.needs_redraw
     }
 
     pub fn add_undo(&mut self)
@@ -210,6 +220,8 @@ impl DrawImage
         {
             self.image = previous;
         }
+
+        self.needs_redraw = true;
     }
 }
 
@@ -227,6 +239,9 @@ impl DerefMut for DrawImage
 {
     fn deref_mut(&mut self) -> &mut Self::Target
     {
+        // just a guess
+        self.needs_redraw = true;
+
         &mut self.image
     }
 }
@@ -372,7 +387,6 @@ struct DrawerWindow
     mouse_position: Point2<i32>,
     draw_color: Color,
     erase_color: Color,
-    needs_redraw: bool,
     previous_draw: Option<Point2<i32>>,
     controls: Controls
 }
@@ -405,17 +419,50 @@ impl DrawerWindow
             Rc::new(RefCell::new(Assets::new(window.canvas.texture_creator())))
         };
 
-        let main_texture = assets.borrow_mut().add_texture(&image);
-
         let events = ctx.event_pump().unwrap();
 
+        let draw_color = Color{r: 0, g: 0, b: 0, a: 255};
         let mut ui = Ui::new(window.clone(), assets.clone());
+
+        let ui_group = Self::new_ui(&mut ui, assets.clone(), draw_color, &image);
+
+        let mut this = Self{
+            events,
+            window,
+            assets,
+            image: DrawImage::new(image),
+            ui,
+            ui_group,
+            scale,
+            color_slider: 0.0,
+            billinear,
+            mouse_position: Point2{x: 0, y: 0},
+            draw_color,
+            erase_color: Color{r: 0, g: 0, b: 0, a: 0},
+            previous_draw: None,
+            controls: Controls::new()
+        };
+
+        this.update_1d_cursor();
+        this.update_2d_cursor(Point2{x: 0.0, y: 0.0});
+
+        this
+    }
+
+    fn new_ui(
+        ui: &mut Ui,
+        assets: Rc<RefCell<Assets>>,
+        draw_color: Color,
+        image: &Image
+    ) -> UiGroup
+    {
+        let main_texture = assets.borrow_mut().add_texture(image);
 
         let pos = Point2{x: 0.3, y: 0.0};
         let element = UiElement{
             kind: UiElementType::Panel,
             pos,
-            size: Point2{x: 1.0 - pos.x, y: 1.0},
+            size: Point2{x: 1.0 - pos.x, y: 1.0}.into(),
             texture: Some(main_texture)
         };
 
@@ -429,7 +476,7 @@ impl DrawerWindow
         let element = UiElement{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: 1.0 - height},
-            size: Point2{x: pos.x, y: height},
+            size: Point2{x: pos.x, y: height}.into(),
             texture: None
         };
 
@@ -447,7 +494,7 @@ impl DrawerWindow
         let element = UiElement{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: selected_part + half_pad.y},
-            size: Point2{x: div - half_pad.y, y: 1.0 - selected_part - half_pad.y},
+            size: Point2{x: div - half_pad.y, y: 1.0 - selected_part - half_pad.y}.into(),
             texture: Some(selector_2d_texture)
         };
 
@@ -456,51 +503,78 @@ impl DrawerWindow
         let element = UiElement{
             kind: UiElementType::Panel,
             pos: Point2{x: div + half_pad.x, y: selected_part + half_pad.y},
-            size: Point2{x: 1.0 - div - half_pad.y, y: 1.0 - selected_part - half_pad.y},
+            size: Point2{x: 1.0 - div - half_pad.y, y: 1.0 - selected_part - half_pad.y}.into(),
             texture: Some(selector_1d_texture)
         };
 
         let selector_1d = ui.push_child(&color_selector, element);
 
-        let draw_color = Color{r: 0, g: 0, b: 0, a: 255};
         let color_image = Image::repeat(1, 1, draw_color);
         let selected_color = assets.borrow_mut().add_texture(&color_image);
 
         let element = UiElement{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: 0.0},
-            size: Point2{x: 1.0, y: selected_part - half_pad.y},
+            size: Point2{x: 1.0, y: selected_part - half_pad.y}.into(),
             texture: Some(selected_color)
         };
 
         ui.push_child(&color_selector, element);
 
-        let ui_group = UiGroup{
+        let empty_color = Color{r: 0, g: 0, b: 0, a: 0};
+
+        let square_cursor_texture = {
+            let size = Point2{x: 16, y: 16};
+
+            let mut square_cursor_image = Image::repeat(size.x, size.y, empty_color);
+
+            square_cursor_image.pixels_mut().for_each(|(pos, pixel)|
+            {
+                if pos.x == 0 || pos.x == (size.x - 1) || pos.y == 0 || pos.y == (size.y - 1)
+                {
+                    *pixel = Color{r: 255, g: 255, b: 255, a: 255};
+                }
+            });
+
+            assets.borrow_mut().add_texture(&square_cursor_image)
+        };
+
+        let element = UiElement{
+            kind: UiElementType::Panel,
+            pos: Point2{x: 0.0, y: 0.0},
+            size: KeepAspect::from(Point2{x: 0.1, y: 0.1}).into(),
+            texture: Some(square_cursor_texture)
+        };
+
+        let selector_2d_cursor = ui.push_child(&selector_2d, element.clone());
+
+        let element = UiElement{
+            size: KeepAspect::from(Point2{x: 0.9, y: 0.9}).into(),
+            ..element
+        };
+
+        let selector_1d_cursor = ui.push_child(&selector_1d, element);
+
+        let element = UiElement{
+            kind: UiElementType::Panel,
+            pos: Point2{x: 0.0, y: 0.0},
+            size: KeepAspect::from(Point2{x: 0.1, y: 0.1}).into(),
+            texture: Some(square_cursor_texture)
+        };
+
+        let draw_cursor = ui.push_child(&main_screen, element);
+
+        UiGroup{
             main_texture,
             main_screen,
             selected_color,
             selector_2d_texture,
             selector_2d,
+            selector_2d_cursor,
             selector_1d_texture,
-            selector_1d
-        };
-
-        Self{
-            events,
-            window,
-            assets,
-            image: DrawImage::new(image),
-            ui,
-            ui_group,
-            scale,
-            color_slider: 0.0,
-            billinear,
-            mouse_position: Point2{x: 0, y: 0},
-            draw_color,
-            erase_color: Color{r: 0, g: 0, b: 0, a: 0},
-            needs_redraw: true,
-            previous_draw: None,
-            controls: Controls::new()
+            selector_1d,
+            selector_1d_cursor,
+            draw_cursor
         }
     }
 
@@ -528,7 +602,7 @@ impl DrawerWindow
                 self.image[pos.zip(self.image.size()).map(|(a, b)| a.round() as usize % b)]
             };
 
-            // just arbitrary numberse kinda lol
+            // just arbitrary numbers kinda lol
             let t_pos = if self.scale > 1.0
             {
                 big_pos
@@ -612,10 +686,13 @@ impl DrawerWindow
 
     pub fn draw(&mut self)
     {
-        self.draw_ui_element(&self.ui_group.main_screen, self.ui_group.main_texture, |image|
+        if self.image.needs_redraw()
         {
-            self.draw_main_image(image);
-        });
+            self.draw_ui_element(&self.ui_group.main_screen, self.ui_group.main_texture, |image|
+            {
+                self.draw_main_image(image);
+            });
+        }
 
         self.draw_ui_element(
             &self.ui_group.selector_2d,
@@ -679,14 +756,32 @@ impl DrawerWindow
             if let Some(position) = self.mouse_inside(&self.ui_group.selector_1d)
             {
                 self.color_slider = position.y;
+                self.update_1d_cursor();
             } else if let Some(position) = self.mouse_inside(&self.ui_group.selector_2d)
             {
+                self.update_2d_cursor(position);
                 self.draw_color = Self::select_color(self.color_slider, position.x, position.y);
             }
         } else if self.controls.is_down(Control::Erase)
         {
             draw_with(self, self.erase_color);
         }
+    }
+
+    fn update_1d_cursor(&mut self)
+    {
+        let mut cursor = self.ui.get(&self.ui_group.selector_1d_cursor);
+
+        cursor.set(&UiAnimatableId::PositionCenteredX, 0.5);
+        cursor.set(&UiAnimatableId::PositionCenteredY, 1.0 - self.color_slider);
+    }
+
+    fn update_2d_cursor(&mut self, position: Point2<f32>)
+    {
+        let mut cursor = self.ui.get(&self.ui_group.selector_2d_cursor);
+
+        cursor.set(&UiAnimatableId::PositionCenteredX, position.x);
+        cursor.set(&UiAnimatableId::PositionCenteredY, 1.0 - position.y);
     }
 
     fn mouse_inside(&self, element: &ElementId) -> Option<Point2<f32>>
@@ -754,8 +849,6 @@ impl DrawerWindow
                         }
 
                         self.controls.set_control_down(control);
-
-                        self.needs_redraw = true;
                     },
                     State::Released =>
                     {
@@ -814,8 +907,13 @@ impl DrawerWindow
                     {
                         match win_event
                         {
-                            WindowEvent::SizeChanged(..)
-                                | WindowEvent::FocusGained
+                            WindowEvent::SizeChanged(..) =>
+                            {
+                                self.ui.resized();
+
+                                special_event = true;
+                            },
+                            WindowEvent::FocusGained
                                 | WindowEvent::Exposed =>
                             {
                                 special_event = true;
@@ -830,34 +928,21 @@ impl DrawerWindow
             // i hate the borrow checker
             if special_event
             {
-                self.needs_redraw = true;
+                // self.needs_redraw = true;
             }
 
-            if self.controls.is_down(Control::Draw)
-                || self.controls.is_down(Control::Erase)
-                || self.controls.is_down(Control::ZoomIn)
-                || self.controls.is_down(Control::ZoomOut)
+            self.update(dt);
+
             {
-                self.needs_redraw = true;
+                let mut canvas = self.canvas_mut();
+
+                canvas.set_draw_color(SdlColor{r: 255, g: 255, b: 255, a: 255});
+                canvas.clear();
             }
 
-            if self.needs_redraw
-            {
-                self.update(dt);
+            self.draw();
 
-                {
-                    let mut canvas = self.canvas_mut();
-
-                    canvas.set_draw_color(SdlColor{r: 255, g: 255, b: 255, a: 255});
-                    canvas.clear();
-                }
-
-                self.draw();
-
-                self.canvas_mut().present();
-
-                self.needs_redraw = false;
-            }
+            self.canvas_mut().present();
 
             thread::sleep(Duration::from_millis(1000 / fps));
         }

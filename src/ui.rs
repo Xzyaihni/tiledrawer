@@ -1,5 +1,5 @@
 use std::{
-    rc::Rc,
+    rc::{Weak, Rc},
     cell::RefCell,
     ops::ControlFlow
 };
@@ -51,20 +51,104 @@ pub struct UiEvent
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
 pub enum UiElementType
 {
     Panel,
     Button
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct KeepAspect
+{
+    aspect: f32,
+    size: Point2<f32>
+}
+
+impl From<Point2<f32>> for KeepAspect
+{
+    fn from(size: Point2<f32>) -> Self
+    {
+        Self{aspect: 1.0, size}
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum UiSize
+{
+    KeepAspect(KeepAspect),
+    Normal(Point2<f32>)
+}
+
+impl From<KeepAspect> for UiSize
+{
+    fn from(value: KeepAspect) -> Self
+    {
+        Self::KeepAspect(value)
+    }
+}
+
+impl From<Point2<f32>> for UiSize
+{
+    fn from(value: Point2<f32>) -> Self
+    {
+        Self::Normal(value)
+    }
+}
+
+impl UiSize
+{
+    pub fn to_size(self, local_aspect: f32) -> Point2<f32>
+    {
+        match self
+        {
+            Self::Normal(x) => x,
+            Self::KeepAspect(KeepAspect{aspect, size: p}) =>
+            {
+                Point2{y: p.y * aspect * local_aspect, ..p}
+            }
+        }
+    }
+
+    fn set_aspect(&mut self, new_aspect: f32)
+    {
+        match self
+        {
+            Self::KeepAspect(KeepAspect{aspect, ..}) => *aspect = new_aspect,
+            _ => ()
+        }
+    }
+
+    pub fn set_x(&mut self, x: f32)
+    {
+        self.inner_mut().x = x;
+    }
+
+    pub fn set_y(&mut self, y: f32)
+    {
+        self.inner_mut().y = y;
+    }
+
+    fn inner_mut(&mut self) -> &mut Point2<f32>
+    {
+        match self
+        {
+            Self::Normal(x) => x,
+            Self::KeepAspect(KeepAspect{size, ..}) => size
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct UiElement
 {
     pub kind: UiElementType,
     pub pos: Point2<f32>,
-    pub size: Point2<f32>,
+    pub size: UiSize,
     pub texture: Option<TextureId>
 }
 
+#[derive(Debug, Clone)]
 pub struct UiElementGlobal
 {
     inner: UiElement,
@@ -87,6 +171,11 @@ impl UiElementGlobal
             (pos - self.global_pos) / self.global_size
         })
     }
+
+    fn set_aspect(&mut self, aspect: f32)
+    {
+        self.inner.size.set_aspect(aspect);
+    }
 }
 
 #[allow(dead_code)]
@@ -96,12 +185,14 @@ pub enum UiAnimatableId
     ScaleX,
     ScaleY,
     PositionX,
-    PositionY
+    PositionY,
+    PositionCenteredX,
+    PositionCenteredY
 }
 
 pub struct UiElementInner
 {
-    parent: Option<(usize, Rc<RefCell<Self>>)>,
+    parent: Option<(usize, Weak<RefCell<Self>>)>,
     element: UiElementGlobal,
     children: Vec<Rc<RefCell<Self>>>
 }
@@ -124,39 +215,47 @@ impl UiElementInner
         Self::new_inner(None, element)
     }
 
-    fn new_child(parent: Rc<RefCell<Self>>, id: usize, element: UiElement) -> Rc<RefCell<Self>>
+    fn new_child(parent: Weak<RefCell<Self>>, id: usize, element: UiElement) -> Rc<RefCell<Self>>
     {
         Self::new_inner(Some((id, parent)), element)
     }
 
     fn new_inner(
-        parent: Option<(usize, Rc<RefCell<Self>>)>,
+        parent: Option<(usize, Weak<RefCell<Self>>)>,
         element: UiElement
     ) -> Rc<RefCell<Self>>
     {
+        let zero = Point2::<f32>::zero();
+
         Rc::new(RefCell::new(Self{
             parent,
             element: UiElementGlobal{
-                
-                global_size: element.size,
-                global_pos: element.pos,
+                global_size: zero,
+                global_pos: zero,
                 inner: element
             },
             children: Vec::new()
         }))
     }
 
-    fn push(this: &Rc<RefCell<Self>>, element: UiElement) -> usize
+    fn push(this: &Rc<RefCell<Self>>, element: UiElement, aspect: f32) -> usize
     {
         let parent = this.clone();
 
-        let mut this = this.borrow_mut();
+        let id;
+        let child;
 
-        let id = this.children.len();
+        {
+            let mut this = this.borrow_mut();
 
-        this.children.push(Self::new_child(parent, id, element));
+            id = this.children.len();
 
-        this.update_child(id);
+            child = Self::new_child(Rc::downgrade(&parent), id, element);
+
+            this.children.push(child.clone());
+        }
+
+        Self::full_update(child, aspect);
 
         id
     }
@@ -169,8 +268,10 @@ impl UiElementInner
         {
             let child = &mut child.element;
 
+            let aspect = this.global_size.aspect();
+
             child.global_pos = this.global_pos + child.inner.pos * this.global_size;
-            child.global_size = child.inner.size * this.global_size;
+            child.global_size = child.inner.size.to_size(aspect) * this.global_size;
         }
 
         child.update_children();
@@ -184,18 +285,50 @@ impl UiElementInner
         }
     }
 
-    fn update(&mut self)
+    fn full_update(this: Rc<RefCell<Self>>, aspect: f32)
     {
-        if let Some((id, parent)) = self.parent.as_ref()
+        this.borrow_mut().update_aspect(aspect);
+        Self::update(this);
+    }
+
+    fn update_aspect(&mut self, aspect: f32)
+    {
+        self.element.set_aspect(aspect);
+
+        for child in self.children.iter()
         {
-            parent.borrow_mut().update_child(*id);
+            child.borrow_mut().update_aspect(aspect);
+        }
+    }
+
+    fn update(this: Rc<RefCell<Self>>)
+    {
+        let pair = this.borrow().parent.clone();
+        if let Some((id, parent)) = pair
+        {
+            parent.upgrade().unwrap().borrow_mut().update_child(id);
         } else
         {
-            self.element.global_pos = self.element.inner.pos;
-            self.element.global_size = self.element.inner.size;
+            let mut this = this.borrow_mut();
 
-            self.update_children();
+            this.element.global_pos = this.element.inner.pos;
+            this.element.global_size = this.element.inner.size.to_size(1.0);
+
+            this.update_children();
         }
+    }
+
+    pub fn size(&self) -> Point2<f32>
+    {
+        let aspect = if let Some((_id, parent)) = self.parent.clone()
+        {
+            parent.upgrade().unwrap().borrow().element.global_size.aspect()
+        } else
+        {
+            1.0
+        };
+
+        self.element.inner.size.to_size(aspect)
     }
 
     fn get(&self, id: &ElementId) -> Rc<RefCell<Self>>
@@ -230,31 +363,45 @@ impl UiElementInner
     }
 }
 
-impl Animatable<UiAnimatableId> for UiElementInner
+impl Animatable<UiAnimatableId> for Rc<RefCell<UiElementInner>>
 {
     fn set(&mut self, id: &UiAnimatableId, value: f32)
     {
-        match id
         {
-            UiAnimatableId::ScaleX =>
+            let mut this = self.borrow_mut();
+            let size = this.size();
+
+            let element = &mut this.element.inner;
+            match id
             {
-                self.element.inner.size.x = value;
-            },
-            UiAnimatableId::ScaleY =>
-            {
-                self.element.inner.size.y = value;
-            },
-            UiAnimatableId::PositionX =>
-            {
-                self.element.inner.pos.x = value;
-            },
-            UiAnimatableId::PositionY =>
-            {
-                self.element.inner.pos.y = value;
+                UiAnimatableId::ScaleX =>
+                {
+                    element.size.set_x(value);
+                },
+                UiAnimatableId::ScaleY =>
+                {
+                    element.size.set_y(value);
+                },
+                UiAnimatableId::PositionX =>
+                {
+                    element.pos.x = value;
+                },
+                UiAnimatableId::PositionY =>
+                {
+                    element.pos.y = value;
+                },
+                UiAnimatableId::PositionCenteredX =>
+                {
+                    element.pos.x = value - (size.x * 0.5);
+                },
+                UiAnimatableId::PositionCenteredY =>
+                {
+                    element.pos.y = value - (size.y * 0.5);
+                }
             }
         }
 
-        self.update();
+        UiElementInner::update(self.clone());
     }
 }
 
@@ -277,19 +424,21 @@ impl Ui
     {
         let id = self.elements.len();
 
-        self.elements.push(UiElementInner::new_parent(element));
+        let element = UiElementInner::new_parent(element);
+        UiElementInner::full_update(element.clone(), self.aspect());
+
+        self.elements.push(element);
 
         ElementId::new(id)
     }
 
     pub fn push_child(&mut self, parent_id: &ElementId, element: UiElement) -> ElementId
     {
-        let id = UiElementInner::push(&self.get(parent_id), element);
+        let id = UiElementInner::push(&self.get(parent_id), element, self.aspect());
 
         parent_id.push(id)
     }
 
-    // if i wasnt lazy i wouldnt need to have this be an exact copy of a function above
     pub fn get(&self, id: &ElementId) -> Rc<RefCell<UiElementInner>>
     {
         let this = &self.elements[id.id];
@@ -319,9 +468,22 @@ impl Ui
             .map(|x| x.round() as u32)
     }
 
+    fn aspect(&self) -> f32
+    {
+        self.window_size().map(|x| x as f32).aspect()
+    }
+
     fn window_size(&self) -> Point2<u32>
     {
         self.window.borrow().window_size()
+    }
+
+    pub fn resized(&mut self)
+    {
+        for element in self.elements.iter()
+        {
+            UiElementInner::full_update(element.clone(), self.aspect());
+        }
     }
 
     pub fn draw(&self)

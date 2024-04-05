@@ -68,8 +68,26 @@ impl Point2<i32>
     }
 }
 
+impl Point2<f32>
+{
+    pub fn zero() -> Self
+    {
+        Self{x: 0.0, y: 0.0}
+    }
+
+    pub fn aspect(self) -> f32
+    {
+        self.x / self.y
+    }
+}
+
 impl Point2<f64>
 {
+    pub fn zero() -> Self
+    {
+        Self{x: 0.0, y: 0.0}
+    }
+
     pub fn rotate(self, rotation: f64) -> Self
     {
         let (r_sin, r_cos) = rotation.sin_cos();
