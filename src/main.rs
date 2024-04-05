@@ -383,6 +383,7 @@ struct DrawerWindow
     ui_group: UiGroup,
     scale: f32,
     color_slider: f32,
+    color_position: Point2<f32>,
     billinear: bool,
     mouse_position: Point2<i32>,
     draw_color: Color,
@@ -435,6 +436,7 @@ impl DrawerWindow
             ui_group,
             scale,
             color_slider: 0.0,
+            color_position: Point2{x: 0.0, y: 0.0},
             billinear,
             mouse_position: Point2{x: 0, y: 0},
             draw_color,
@@ -445,7 +447,7 @@ impl DrawerWindow
 
         this.update_cursor();
         this.update_1d_cursor();
-        this.update_2d_cursor(Point2{x: 0.0, y: 0.0});
+        this.update_2d_cursor();
 
         this
     }
@@ -790,16 +792,24 @@ impl DrawerWindow
             if let Some(position) = self.mouse_inside(&self.ui_group.selector_1d)
             {
                 self.color_slider = position.y;
+                self.set_selected_color();
                 self.update_1d_cursor();
             } else if let Some(position) = self.mouse_inside(&self.ui_group.selector_2d)
             {
-                self.update_2d_cursor(position);
-                self.draw_color = Self::select_color(self.color_slider, position.x, position.y);
+                self.color_position = position;
+                self.set_selected_color();
+                self.update_2d_cursor();
             }
         } else if self.controls.is_down(Control::Erase)
         {
             draw_with(self, self.erase_color);
         }
+    }
+
+    fn set_selected_color(&mut self)
+    {
+        let position = self.color_position;
+        self.draw_color = Self::select_color(self.color_slider, position.x, position.y);
     }
 
     fn update_1d_cursor(&mut self)
@@ -810,10 +820,11 @@ impl DrawerWindow
         cursor.set(&UiAnimatableId::PositionCenteredY, 1.0 - self.color_slider);
     }
 
-    fn update_2d_cursor(&mut self, position: Point2<f32>)
+    fn update_2d_cursor(&mut self)
     {
         let mut cursor = self.ui.get(&self.ui_group.selector_2d_cursor);
 
+        let position = self.color_position;
         cursor.set(&UiAnimatableId::PositionCenteredX, position.x);
         cursor.set(&UiAnimatableId::PositionCenteredY, 1.0 - position.y);
     }
