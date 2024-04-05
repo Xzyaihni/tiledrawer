@@ -401,10 +401,9 @@ impl DrawerWindow
         let video = ctx.video().unwrap();
 
         let scale: f32 = 0.25;
-        let scale_r = scale.recip().round() as u32;
 
-        let width = image.width as u32 * 8 * scale_r;
-        let height = image.height as u32 * 5 * scale_r;
+        let width = 900;
+        let height = 500;
 
         let window = video
             .window("cool drawer", width, height)
