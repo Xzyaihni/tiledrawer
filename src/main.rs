@@ -631,7 +631,7 @@ impl DrawerWindow
                 self.image.get_billinear_overflowing(pos)
             } else
             {
-                self.image[pos.zip(self.image.size()).map(|(a, b)| a.round() as usize % b)]
+                self.image[pos.zip(self.image.size()).map(|(a, b)| a as usize % b)]
             };
 
             // just arbitrary numbers kinda lol
@@ -827,13 +827,20 @@ impl DrawerWindow
 
         let single_pixel = min_total_size.recip() / self.scale;
 
-        cursor.set(&UiAnimatableId::ScaleX, single_pixel);
-        cursor.set(&UiAnimatableId::ScaleY, single_pixel);
+        let cursor_size = single_pixel * 1.2;
 
-        if let Some(pos) = self.mouse_inside(&self.ui_group.main_screen)
+        cursor.set(&UiAnimatableId::ScaleX, cursor_size);
+        cursor.set(&UiAnimatableId::ScaleY, cursor_size);
+
+        if let Some(pos) = self.mouse_image()
         {
-            cursor.set(&UiAnimatableId::PositionCenteredX, pos.x);
-            cursor.set(&UiAnimatableId::PositionCenteredY, 1.0 - pos.y);
+            let pos = (pos + Point2{x: 0, y: 1}).map(|x| x as f32) / total_size / self.scale;
+
+            let offset = single_pixel * 0.1;
+            let pos = pos + Point2{x: -offset, y: offset};
+
+            cursor.set(&UiAnimatableId::PositionX, pos.x);
+            cursor.set(&UiAnimatableId::PositionY, 1.0 - pos.y);
         }
     }
 
@@ -869,7 +876,7 @@ impl DrawerWindow
         {
             (pos * size).map(|mouse|
             {
-                (mouse * self.scale).round() as i32
+                (mouse * self.scale) as i32
             })
         })
     }
