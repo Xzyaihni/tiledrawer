@@ -600,7 +600,7 @@ impl DrawerWindow
             pos: Point2{x: 0.4, y: 0.1},
             size: Point2{x: 0.1, y: 0.8}.into(),
             background: Self::texture_filled(assets.clone(), Color{r: 235, g: 235, b: 235, a: 255}),
-            scrollbar: Self::texture_filled(assets.clone(), Color{r: 220, g: 220, b: 220, a: 255})
+            scrollbar: Self::texture_filled(assets.clone(), Color{r: 205, g: 205, b: 205, a: 255})
         });
 
         ui.push_child(&main_screen, element);

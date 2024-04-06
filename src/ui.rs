@@ -9,7 +9,7 @@ use sdl2::rect::Rect;
 use crate::{Point2, WindowWrapper, Assets, TextureId, animator::Animatable};
 
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ElementId
 {
     Primitive(ElementPrimitiveId),
@@ -27,7 +27,7 @@ impl ElementId
             {
                 match complex
                 {
-                    ComplexElement::Scroll(x) => x.body
+                    ComplexElement::Scroll(x) => x.body_id
                 }
             }
         }
@@ -42,7 +42,7 @@ impl ElementId
             {
                 match complex
                 {
-                    ComplexElement::Scroll(x) => &x.body
+                    ComplexElement::Scroll(x) => &x.body_id
                 }
             }
         }
@@ -96,12 +96,24 @@ impl<'a, T: TopLevelAdder> ElementAdder<'a, T>
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ScrollElement
 {
-    body: ElementPrimitiveId,
-    bar: ElementPrimitiveId,
+    held: bool,
+    scroll: f32,
+    body: Rc<RefCell<UiElementInner>>,
+    body_id: ElementPrimitiveId,
+    bar: Rc<RefCell<UiElementInner>>,
+    bar_id: ElementPrimitiveId,
     background: ElementPrimitiveId
+}
+
+impl PartialEq for ScrollElement
+{
+    fn eq(&self, other: &Self) -> bool
+    {
+        self.body_id == other.body_id
+    }
 }
 
 impl ScrollElement
@@ -111,37 +123,82 @@ impl ScrollElement
         mut adder: ElementAdder<T>
     ) -> Self
     {
-        let body = adder.top_level(UiElementPrimitive{
+        let body_id = adder.top_level(UiElementPrimitive{
             kind: UiElementType::Panel,
             pos: info.pos,
             size: info.size,
             texture: None
         });
 
-        let back_width = 0.8;
-        let background = adder.child(&body, UiElementPrimitive{
+        let background = adder.child(&body_id, UiElementPrimitive{
             kind: UiElementType::Button,
-            pos: Point2{x: (1.0 - back_width) * 0.5, y: 0.0},
-            size: Point2{x: back_width, y: 1.0}.into(),
+            pos: Point2::repeat(0.0),
+            size: Point2::repeat(1.0).into(),
             texture: Some(info.background)
         });
 
-        let bar = adder.child(&body, UiElementPrimitive{
+        let bar_id = adder.child(&body_id, UiElementPrimitive{
             kind: UiElementType::Button,
             pos: Point2::repeat(0.0),
             size: KeepAspect::from(Point2{x: 1.0, y: 1.0}).into(),
             texture: Some(info.scrollbar)
         });
 
+        let body = adder.ui.get_inner(&body_id);
+        let bar = adder.ui.get_inner(&bar_id);
+
         Self{
+            held: false,
+            scroll: 0.0,
             body,
+            body_id,
             bar,
+            bar_id,
             background
         }
     }
+
+    pub fn scroll(&self) -> f32
+    {
+        self.scroll
+    }
+
+    fn set_scroll(&mut self, ui: &Ui, new_scroll: f32)
+    {
+        self.scroll = new_scroll;
+
+        self.update_bar(ui);
+    }
+
+    fn update_bar(&mut self, ui: &Ui)
+    {
+        self.bar.set(&UiAnimatableId::PositionCenteredY, self.scroll);
+    }
+
+    fn mouse_move(&mut self, ui: &Ui, pos: Point2<f32>)
+    {
+        if self.held
+        {
+            let inside_pos = self.body.borrow().element().inside_position(pos);
+            if let Some(pos) = inside_pos
+            {
+                self.set_scroll(ui, pos.y);
+            }
+        }
+    }
+
+    fn key_down(&mut self)
+    {
+        self.held = true;
+    }
+
+    fn key_up(&mut self)
+    {
+        self.held = false;
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ComplexElement
 {
     Scroll(ScrollElement)
@@ -458,6 +515,7 @@ pub enum UiAnimatableId
     PositionCenteredY
 }
 
+#[derive(Debug)]
 pub struct UiElementInner
 {
     parent: Option<(usize, Weak<RefCell<Self>>)>,
