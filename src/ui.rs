@@ -35,7 +35,7 @@ impl ElementId
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ScrollElement
+pub struct ScrollElement
 {
     body: ElementPrimitiveId,
     bar: ElementPrimitiveId,
@@ -43,7 +43,7 @@ struct ScrollElement
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ComplexElement
+pub enum ComplexElement
 {
     Scroll(ScrollElement)
 }

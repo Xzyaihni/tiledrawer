@@ -603,7 +603,7 @@ impl DrawerWindow
             scrollbar: circle_cursor_texture
         });
 
-        // ui.push_child(&main_screen, element);
+        ui.push_child(&main_screen, element);
 
         UiGroup{
             main_texture,
