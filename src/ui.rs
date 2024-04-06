@@ -18,6 +18,21 @@ pub enum ElementId
 
 impl ElementId
 {
+    fn into_primitive_id(self) -> ElementPrimitiveId
+    {
+        match self
+        {
+            Self::Primitive(x) => x,
+            Self::Complex(complex) =>
+            {
+                match complex
+                {
+                    ComplexElement::Scroll(x) => x.body
+                }
+            }
+        }
+    }
+
     fn primitive_id(&self) -> &ElementPrimitiveId
     {
         match self
@@ -34,6 +49,53 @@ impl ElementId
     }
 }
 
+trait TopLevelAdder
+{
+    fn add(&self, ui: &mut Ui, element: UiElementPrimitive) -> ElementPrimitiveId;
+}
+
+struct TopLevelAdderNormal;
+
+impl TopLevelAdder for TopLevelAdderNormal
+{
+    fn add(&self, ui: &mut Ui, element: UiElementPrimitive) -> ElementPrimitiveId
+    {
+        ui.push(element).into_primitive_id()
+    }
+}
+
+struct TopLevelAdderChild<'a>
+{
+    parent: &'a ElementId,
+}
+
+impl<'a> TopLevelAdder for TopLevelAdderChild<'a>
+{
+    fn add(&self, ui: &mut Ui, element: UiElementPrimitive) -> ElementPrimitiveId
+    {
+        ui.push_child(self.parent, element).into_primitive_id()
+    }
+}
+
+struct ElementAdder<'a, TopLevel>
+{
+    ui: &'a mut Ui,
+    adder: TopLevel
+}
+
+impl<'a, T: TopLevelAdder> ElementAdder<'a, T>
+{
+    fn top_level(&mut self, element: UiElementPrimitive) -> ElementPrimitiveId
+    {
+        self.adder.add(self.ui, element)
+    }
+
+    fn child(&self, parent: &ElementPrimitiveId, element: UiElementPrimitive) -> ElementPrimitiveId
+    {
+        element.new_child_inner(self.ui, parent)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScrollElement
 {
@@ -42,10 +104,61 @@ pub struct ScrollElement
     background: ElementPrimitiveId
 }
 
+impl ScrollElement
+{
+    fn new_with<T: TopLevelAdder>(
+        info: ScrollElementInfo,
+        mut adder: ElementAdder<T>
+    ) -> Self
+    {
+        let body = adder.top_level(UiElementPrimitive{
+            kind: UiElementType::Panel,
+            pos: info.pos,
+            size: info.size,
+            texture: None
+        });
+
+        let back_width = 0.8;
+        let background = adder.child(&body, UiElementPrimitive{
+            kind: UiElementType::Button,
+            pos: Point2{x: (1.0 - back_width) * 0.5, y: 0.0},
+            size: Point2{x: back_width, y: 1.0}.into(),
+            texture: Some(info.background)
+        });
+
+        let bar = adder.child(&body, UiElementPrimitive{
+            kind: UiElementType::Button,
+            pos: Point2::repeat(0.0),
+            size: KeepAspect::from(Point2{x: 1.0, y: 1.0}).into(),
+            texture: Some(info.scrollbar)
+        });
+
+        Self{
+            body,
+            bar,
+            background
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComplexElement
 {
     Scroll(ScrollElement)
+}
+
+impl ComplexElement
+{
+    fn new_with<T: TopLevelAdder>(
+        value: UiElementComplex,
+        adder: ElementAdder<T>
+    ) -> Self
+    {
+        match value
+        {
+            UiElementComplex::Scroll(x) => Self::Scroll(ScrollElement::new_with(x, adder))
+        }
+    }
 }
 
 // i could just store the children in a vec but this is much cooler
@@ -176,6 +289,16 @@ impl UiSize
         self.inner_mut().y = y;
     }
 
+    #[allow(dead_code)]
+    pub fn map(mut self, f: impl FnOnce(Point2<f32>) -> Point2<f32>) -> Self
+    {
+        let p = self.inner_mut();
+
+        *p = f(*p);
+
+        self
+    }
+
     fn inner_mut(&mut self) -> &mut Point2<f32>
     {
         match self
@@ -219,7 +342,7 @@ impl UiElement
         }
     }
 
-    fn new_child(self, ui: &Ui, parent: &ElementId) -> ElementId
+    fn new_child(self, ui: &mut Ui, parent: &ElementId) -> ElementId
     {
         match self
         {
@@ -248,12 +371,12 @@ impl UiElementComplex
 {
     fn new(self, ui: &mut Ui) -> ComplexElement
     {
-        todo!()
+        ComplexElement::new_with(self, ElementAdder{ui, adder: TopLevelAdderNormal})
     }
 
-    fn new_child(self, ui: &Ui, parent: &ElementId) -> ComplexElement
+    fn new_child(self, ui: &mut Ui, parent: &ElementId) -> ComplexElement
     {
-        todo!();
+        ComplexElement::new_with(self, ElementAdder{ui, adder: TopLevelAdderChild{parent}})
     }
 }
 
@@ -282,9 +405,14 @@ impl UiElementPrimitive
 
     fn new_child(self, ui: &Ui, parent: &ElementId) -> ElementPrimitiveId
     {
-        let id = UiElementInner::push(&ui.get(parent), self, ui.aspect());
+        self.new_child_inner(ui, parent.primitive_id())
+    }
 
-        parent.primitive_id().push(id)
+    fn new_child_inner(self, ui: &Ui, parent: &ElementPrimitiveId) -> ElementPrimitiveId
+    {
+        let id = UiElementInner::push(&ui.get_inner(parent), self, ui.aspect());
+
+        parent.push(id)
     }
 }
 
@@ -293,7 +421,7 @@ pub struct UiElementGlobal
 {
     inner: UiElementPrimitive,
     global_size: Point2<f32>,
-    global_pos: Point2<f32>,
+    global_pos: Point2<f32>
 }
 
 impl UiElementGlobal
@@ -582,6 +710,11 @@ impl Ui
     {
         let id = id.primitive_id();
 
+        self.get_inner(id)
+    }
+
+    fn get_inner(&self, id: &ElementPrimitiveId) -> Rc<RefCell<UiElementInner>>
+    {
         let this = &self.elements[id.id];
 
         if let Some(child_id) = id.child.as_ref()

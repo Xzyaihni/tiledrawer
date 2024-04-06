@@ -597,10 +597,10 @@ impl DrawerWindow
         let draw_cursor = ui.push_child(&main_screen, element);
 
         let element = UiElementComplex::Scroll(ScrollElementInfo{
-            pos: Point2{x: 0.4, y: 0.8},
-            size: Point2{x: 0.1, y: 0.1}.into(),
-            background: square_cursor_texture,
-            scrollbar: circle_cursor_texture
+            pos: Point2{x: 0.4, y: 0.1},
+            size: Point2{x: 0.1, y: 0.8}.into(),
+            background: Self::texture_filled(assets.clone(), Color{r: 235, g: 235, b: 235, a: 255}),
+            scrollbar: Self::texture_filled(assets.clone(), Color{r: 220, g: 220, b: 220, a: 255})
         });
 
         ui.push_child(&main_screen, element);
@@ -617,6 +617,13 @@ impl DrawerWindow
             selector_1d_cursor,
             draw_cursor
         }
+    }
+
+    fn texture_filled(assets: Rc<RefCell<Assets>>, color: Color) -> TextureId
+    {
+        let image = Image::repeat(1, 1, color);
+
+        assets.borrow_mut().add_texture(&image)
     }
 
     fn procedural_texture(
