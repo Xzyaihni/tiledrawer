@@ -9,15 +9,54 @@ use sdl2::rect::Rect;
 use crate::{Point2, WindowWrapper, Assets, TextureId, animator::Animatable};
 
 
-// i could just store the children in a vec but this is much cooler
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ElementId
+pub enum ElementId
 {
-    id: usize,
-    child: Option<Box<ElementId>>
+    Primitive(ElementPrimitiveId),
+    Complex(ComplexElement)
 }
 
 impl ElementId
+{
+    fn primitive_id(&self) -> &ElementPrimitiveId
+    {
+        match self
+        {
+            Self::Primitive(x) => x,
+            Self::Complex(complex) =>
+            {
+                match complex
+                {
+                    ComplexElement::Scroll(x) => &x.body
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScrollElement
+{
+    body: ElementPrimitiveId,
+    bar: ElementPrimitiveId,
+    background: ElementPrimitiveId
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ComplexElement
+{
+    Scroll(ScrollElement)
+}
+
+// i could just store the children in a vec but this is much cooler
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ElementPrimitiveId
+{
+    id: usize,
+    child: Option<Box<Self>>
+}
+
+impl ElementPrimitiveId
 {
     pub fn new(id: usize) -> Self
     {
@@ -47,7 +86,7 @@ impl ElementId
 
 pub struct UiEvent
 {
-    pub element_id: ElementId
+    pub element_id: ElementPrimitiveId
 }
 
 #[allow(dead_code)]
@@ -147,8 +186,79 @@ impl UiSize
     }
 }
 
+pub enum UiElement
+{
+    Complex(UiElementComplex),
+    Primitive(UiElementPrimitive)
+}
+
+impl From<UiElementPrimitive> for UiElement
+{
+    fn from(x: UiElementPrimitive) -> Self
+    {
+        Self::Primitive(x)
+    }
+}
+
+impl From<UiElementComplex> for UiElement
+{
+    fn from(x: UiElementComplex) -> Self
+    {
+        Self::Complex(x)
+    }
+}
+
+impl UiElement
+{
+    fn new(self, ui: &mut Ui) -> ElementId
+    {
+        match self
+        {
+            Self::Complex(x) => ElementId::Complex(x.new(ui)),
+            Self::Primitive(x) => ElementId::Primitive(x.new(ui))
+        }
+    }
+
+    fn new_child(self, ui: &Ui, parent: &ElementId) -> ElementId
+    {
+        match self
+        {
+            Self::Complex(x) => ElementId::Complex(x.new_child(ui, parent)),
+            Self::Primitive(x) => ElementId::Primitive(x.new_child(ui, parent))
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct UiElement
+pub struct ScrollElementInfo
+{
+    pub pos: Point2<f32>,
+    pub size: UiSize,
+    pub background: TextureId,
+    pub scrollbar: TextureId
+}
+
+#[derive(Debug, Clone)]
+pub enum UiElementComplex
+{
+    Scroll(ScrollElementInfo)
+}
+
+impl UiElementComplex
+{
+    fn new(self, ui: &mut Ui) -> ComplexElement
+    {
+        todo!()
+    }
+
+    fn new_child(self, ui: &Ui, parent: &ElementId) -> ComplexElement
+    {
+        todo!();
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UiElementPrimitive
 {
     pub kind: UiElementType,
     pub pos: Point2<f32>,
@@ -156,10 +266,32 @@ pub struct UiElement
     pub texture: Option<TextureId>
 }
 
+impl UiElementPrimitive
+{
+    fn new(self, ui: &mut Ui) -> ElementPrimitiveId
+    {
+        let id = ui.elements.len();
+
+        let element = UiElementInner::new_parent(self);
+        UiElementInner::full_update(element.clone(), ui.aspect());
+
+        ui.elements.push(element);
+
+        ElementPrimitiveId::new(id)
+    }
+
+    fn new_child(self, ui: &Ui, parent: &ElementId) -> ElementPrimitiveId
+    {
+        let id = UiElementInner::push(&ui.get(parent), self, ui.aspect());
+
+        parent.primitive_id().push(id)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UiElementGlobal
 {
-    inner: UiElement,
+    inner: UiElementPrimitive,
     global_size: Point2<f32>,
     global_pos: Point2<f32>,
 }
@@ -218,19 +350,23 @@ impl UiElementInner
         &self.element
     }
 
-    fn new_parent(element: UiElement) -> Rc<RefCell<Self>>
+    fn new_parent(element: UiElementPrimitive) -> Rc<RefCell<Self>>
     {
         Self::new_inner(None, element)
     }
 
-    fn new_child(parent: Weak<RefCell<Self>>, id: usize, element: UiElement) -> Rc<RefCell<Self>>
+    fn new_child(
+        parent: Weak<RefCell<Self>>,
+        id: usize,
+        element: UiElementPrimitive
+    ) -> Rc<RefCell<Self>>
     {
         Self::new_inner(Some((id, parent)), element)
     }
 
     fn new_inner(
         parent: Option<(usize, Weak<RefCell<Self>>)>,
-        element: UiElement
+        element: UiElementPrimitive
     ) -> Rc<RefCell<Self>>
     {
         let zero = Point2::<f32>::zero();
@@ -246,7 +382,7 @@ impl UiElementInner
         }))
     }
 
-    fn push(this: &Rc<RefCell<Self>>, element: UiElement, aspect: f32) -> usize
+    fn push(this: &Rc<RefCell<Self>>, element: UiElementPrimitive, aspect: f32) -> usize
     {
         let parent = this.clone();
 
@@ -339,7 +475,7 @@ impl UiElementInner
         self.element.inner.size.to_size(aspect)
     }
 
-    fn get(&self, id: &ElementId) -> Rc<RefCell<Self>>
+    fn get(&self, id: &ElementPrimitiveId) -> Rc<RefCell<Self>>
     {
         let this = &self.children[id.id];
 
@@ -352,9 +488,9 @@ impl UiElementInner
         }
     }
 
-    fn try_for_each_element<T, F>(&self, id: ElementId, f: &mut F) -> ControlFlow<T>
+    fn try_for_each_element<T, F>(&self, id: ElementPrimitiveId, f: &mut F) -> ControlFlow<T>
     where
-        F: FnMut(&ElementId, &UiElementGlobal) -> ControlFlow<T>
+        F: FnMut(&ElementPrimitiveId, &UiElementGlobal) -> ControlFlow<T>
     {
         match f(&id, &self.element)
         {
@@ -428,27 +564,24 @@ impl Ui
         Self{window, assets, elements: Vec::new()}
     }
 
-    pub fn push(&mut self, element: UiElement) -> ElementId
+    pub fn push(&mut self, element: impl Into<UiElement>) -> ElementId
     {
-        let id = self.elements.len();
-
-        let element = UiElementInner::new_parent(element);
-        UiElementInner::full_update(element.clone(), self.aspect());
-
-        self.elements.push(element);
-
-        ElementId::new(id)
+        element.into().new(self)
     }
 
-    pub fn push_child(&mut self, parent_id: &ElementId, element: UiElement) -> ElementId
+    pub fn push_child(
+        &mut self,
+        parent_id: &ElementId,
+        element: impl Into<UiElement>
+    ) -> ElementId
     {
-        let id = UiElementInner::push(&self.get(parent_id), element, self.aspect());
-
-        parent_id.push(id)
+        element.into().new_child(self, parent_id)
     }
 
     pub fn get(&self, id: &ElementId) -> Rc<RefCell<UiElementInner>>
     {
+        let id = id.primitive_id();
+
         let this = &self.elements[id.id];
 
         if let Some(child_id) = id.child.as_ref()
@@ -554,11 +687,11 @@ impl Ui
 
     fn try_for_each_element<T, F>(&self, mut f: F) -> ControlFlow<T>
     where
-        F: FnMut(&ElementId, &UiElementGlobal) -> ControlFlow<T>
+        F: FnMut(&ElementPrimitiveId, &UiElementGlobal) -> ControlFlow<T>
     {
         self.elements.iter().enumerate().try_for_each(|(index, element)|
         {
-            let id = ElementId::new(index);
+            let id = ElementPrimitiveId::new(index);
 
             element.borrow().try_for_each_element(id, &mut f)
         })
@@ -566,7 +699,7 @@ impl Ui
 
     fn for_each_element<F>(&self, mut f: F)
     where
-        F: FnMut(&ElementId, &UiElementGlobal)
+        F: FnMut(&ElementPrimitiveId, &UiElementGlobal)
     {
         self.try_for_each_element(|id, element|
         {

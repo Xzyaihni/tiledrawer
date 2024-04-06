@@ -27,7 +27,18 @@ use sdl2::{
 };
 
 use image::{ImageError, RgbaImage, Rgba};
-use ui::{Ui, UiAnimatableId, ElementId, UiElement, UiElementType, KeepAspect};
+
+use ui::{
+    Ui,
+    UiAnimatableId,
+    ElementId,
+    UiElementPrimitive,
+    UiElementComplex,
+    UiElementType,
+    ScrollElementInfo,
+    KeepAspect
+};
+
 use animator::Animatable;
 pub use point::Point2;
 
@@ -461,7 +472,7 @@ impl DrawerWindow
         let main_texture = assets.borrow_mut().add_texture(image);
 
         let pos = Point2{x: 0.3, y: 0.0};
-        let element = UiElement{
+        let element = UiElementPrimitive{
             kind: UiElementType::Panel,
             pos,
             size: Point2{x: 1.0 - pos.x, y: 1.0}.into(),
@@ -482,7 +493,7 @@ impl DrawerWindow
 
         let half_pad = padding / 2.0;
 
-        let element = UiElement{
+        let element = UiElementPrimitive{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0 + half_pad.x, y: 1.0 - height},
             size: Point2{x: pos.x - padding.x, y: height}.into(),
@@ -500,7 +511,7 @@ impl DrawerWindow
 
         let selected_part = 0.1;
         let div = 0.9;
-        let element = UiElement{
+        let element = UiElementPrimitive{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: selected_part + half_pad.y},
             size: Point2{x: div - half_pad.y, y: 1.0 - selected_part - half_pad.y}.into(),
@@ -509,7 +520,7 @@ impl DrawerWindow
 
         let selector_2d = ui.push_child(&color_selector, element);
 
-        let element = UiElement{
+        let element = UiElementPrimitive{
             kind: UiElementType::Panel,
             pos: Point2{x: div + half_pad.x, y: selected_part + half_pad.y},
             size: Point2{x: 1.0 - div - half_pad.y, y: 1.0 - selected_part - half_pad.y}.into(),
@@ -521,7 +532,7 @@ impl DrawerWindow
         let color_image = Image::repeat(1, 1, draw_color);
         let selected_color = assets.borrow_mut().add_texture(&color_image);
 
-        let element = UiElement{
+        let element = UiElementPrimitive{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: 0.0},
             size: Point2{x: 1.0, y: selected_part - half_pad.y}.into(),
@@ -530,52 +541,37 @@ impl DrawerWindow
 
         ui.push_child(&color_selector, element);
 
-        let empty_color = Color{r: 0, g: 0, b: 0, a: 0};
-
-        let square_cursor_texture = {
-            let size = Point2{x: 8, y: 8};
-
-            let mut square_cursor_image = Image::repeat(size.x, size.y, empty_color);
-
-            square_cursor_image.pixels_mut().for_each(|(pos, pixel)|
+        let size = Point2::repeat(8);
+        let square_cursor_texture = Self::procedural_texture(assets.clone(), size, |pos, pixel|
+        {
+            if pos.x == 0 || pos.x == (size.x - 1) || pos.y == 0 || pos.y == (size.y - 1)
             {
-                if pos.x == 0 || pos.x == (size.x - 1) || pos.y == 0 || pos.y == (size.y - 1)
-                {
-                    *pixel = Color{r: 255, g: 255, b: 255, a: 255};
-                }
-            });
+                *pixel = Color{r: 255, g: 255, b: 255, a: 255};
+            }
+        });
 
-            assets.borrow_mut().add_texture(&square_cursor_image)
-        };
+        let size = Point2::repeat(64);
+        let thickness = 0.1;
 
-        let circle_cursor_texture = {
-            let size = Point2{x: 64, y: 64};
-            let thickness = 0.1;
+        let circle_cursor_texture = Self::procedural_texture(assets.clone(), size, |pos, pixel|
+        {
+            let center = Point2{x: 0.5, y: 0.5};
+            let pos = pos.map(|x| x as f32) / size.map(|x| x as f32);
 
-            let mut circle_cursor_image = Image::repeat(size.x, size.y, empty_color);
+            let pos = pos - center;
 
-            circle_cursor_image.pixels_mut().for_each(|(pos, pixel)|
+            let distance = pos.x.hypot(pos.y);
+
+            let far = 0.5;
+            let near = far - thickness;
+
+            if distance > near && distance < far
             {
-                let center = Point2{x: 0.5, y: 0.5};
-                let pos = pos.map(|x| x as f32) / size.map(|x| x as f32);
+                *pixel = Color{r: 255, g: 255, b: 255, a: 255};
+            }
+        });
 
-                let pos = pos - center;
-
-                let distance = pos.x.hypot(pos.y);
-
-                let far = 0.5;
-                let near = far - thickness;
-
-                if distance > near && distance < far
-                {
-                    *pixel = Color{r: 255, g: 255, b: 255, a: 255};
-                }
-            });
-
-            assets.borrow_mut().add_texture(&circle_cursor_image)
-        };
-
-        let element = UiElement{
+        let element = UiElementPrimitive{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: 0.0},
             size: KeepAspect::from(Point2{x: 0.06, y: 0.06}).into(),
@@ -584,14 +580,14 @@ impl DrawerWindow
 
         let selector_2d_cursor = ui.push_child(&selector_2d, element.clone());
 
-        let element = UiElement{
+        let element = UiElementPrimitive{
             size: KeepAspect::from(Point2{x: 0.9, y: 0.9}).into(),
             ..element
         };
 
         let selector_1d_cursor = ui.push_child(&selector_1d, element);
 
-        let element = UiElement{
+        let element = UiElementPrimitive{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: 0.0},
             size: KeepAspect::from(Point2{x: 0.1, y: 0.1}).into(),
@@ -599,6 +595,15 @@ impl DrawerWindow
         };
 
         let draw_cursor = ui.push_child(&main_screen, element);
+
+        let element = UiElementComplex::Scroll(ScrollElementInfo{
+            pos: Point2{x: 0.4, y: 0.8},
+            size: Point2{x: 0.1, y: 0.1}.into(),
+            background: square_cursor_texture,
+            scrollbar: circle_cursor_texture
+        });
+
+        // ui.push_child(&main_screen, element);
 
         UiGroup{
             main_texture,
@@ -612,6 +617,21 @@ impl DrawerWindow
             selector_1d_cursor,
             draw_cursor
         }
+    }
+
+    fn procedural_texture(
+        assets: Rc<RefCell<Assets>>,
+        size: Point2<usize>,
+        f: impl Fn(Point2<usize>, &mut Color)
+    ) -> TextureId
+    {
+        let empty_color = Color{r: 0, g: 0, b: 0, a: 0};
+
+        let mut image = Image::repeat(size.x, size.y, empty_color);
+
+        image.pixels_mut().for_each(|(pos, pixel)| f(pos, pixel));
+
+        assets.borrow_mut().add_texture(&image)
     }
 
     pub fn canvas_mut(&mut self) -> RefMut<Canvas<Window>>
