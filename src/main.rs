@@ -17,6 +17,7 @@ use std::{
 };
 
 use sdl2::{
+    Sdl,
     EventPump,
     mouse::MouseButton,
     keyboard::Keycode,
@@ -282,6 +283,18 @@ enum State
     Released
 }
 
+impl State
+{
+    pub fn is_down(&self) -> bool
+    {
+        match self
+        {
+            Self::Pressed => true,
+            _ => false
+        }
+    }
+}
+
 struct Controls
 {
     states: Vec<State>
@@ -386,7 +399,6 @@ impl From<Hsv> for Color
 
 struct DrawerWindow
 {
-    events: EventPump,
     window: Rc<RefCell<WindowWrapper>>,
     assets: Rc<RefCell<Assets>>,
     image: DrawImage,
@@ -405,10 +417,12 @@ struct DrawerWindow
 
 impl DrawerWindow
 {
-    pub fn new(image: Image, billinear: bool) -> Self
+    pub fn new(
+        ctx: Sdl,
+        image: Image,
+        billinear: bool
+    ) -> Self
     {
-        let ctx = sdl2::init().unwrap();
-
         let video = ctx.video().unwrap();
 
         let scale: f32 = 0.25;
@@ -430,15 +444,12 @@ impl DrawerWindow
             Rc::new(RefCell::new(Assets::new(window.canvas.texture_creator())))
         };
 
-        let events = ctx.event_pump().unwrap();
-
         let draw_color = Color{r: 0, g: 0, b: 0, a: 255};
         let mut ui = Ui::new(window.clone(), assets.clone());
 
         let ui_group = Self::new_ui(&mut ui, assets.clone(), draw_color, &image);
 
         let mut this = Self{
-            events,
             window,
             assets,
             image: DrawImage::new(image),
@@ -599,6 +610,7 @@ impl DrawerWindow
         let element = UiElementComplex::Scroll(ScrollElementInfo{
             pos: Point2{x: 0.4, y: 0.1},
             size: Point2{x: 0.1, y: 0.8}.into(),
+            bar_size: 0.2,
             background: Self::texture_filled(assets.clone(), Color{r: 235, g: 235, b: 235, a: 255}),
             scrollbar: Self::texture_filled(assets.clone(), Color{r: 205, g: 205, b: 205, a: 255})
         });
@@ -881,15 +893,21 @@ impl DrawerWindow
         }
     }
 
-    fn mouse_inside(&self, element: &ElementId) -> Option<Point2<f32>>
+    fn mouse_normalized(&self) -> Point2<f32>
     {
         let window_size = self.window.borrow().window_size().map(|x| x as f32);
+
         let mouse_position = self.mouse_position.map(|x| x as f32) / window_size;
 
-        let mouse_position = Point2{
+        Point2{
             y: 1.0 - mouse_position.y,
             ..mouse_position
-        };
+        }
+    }
+
+    fn mouse_inside(&self, element: &ElementId) -> Option<Point2<f32>>
+    {
+        let mouse_position = self.mouse_normalized();
 
         self.ui.get(element)
             .borrow()
@@ -918,7 +936,48 @@ impl DrawerWindow
         })
     }
 
-    pub fn wait_exit(&mut self)
+    fn on_control(&mut self, control: Control, state: State)
+    {
+        if control == Control::Draw
+        {
+            self.ui.mouse_state(state.is_down(), self.mouse_normalized());
+        }
+
+        match state
+        {
+            State::Pressed => {
+                match control
+                {
+                    Control::Undo =>
+                    {
+                        self.image.undo();
+                    },
+                    Control::Draw | Control::Erase =>
+                    {
+                        self.image.add_undo();
+                    },
+                    _ => ()
+                }
+
+                self.controls.set_control_down(control);
+            },
+            State::Released =>
+            {
+                match control
+                {
+                    Control::Draw | Control::Erase =>
+                    {
+                        self.previous_draw = None;
+                    },
+                    _ => ()
+                }
+
+                self.controls.set_control_up(control);
+            }
+        }
+    }
+
+    pub fn wait_exit(&mut self, events: &mut EventPump)
     {
         let fps = 60;
         let dt = 1.0 / fps as f32;
@@ -927,43 +986,7 @@ impl DrawerWindow
         {
             let mut special_event = false;
 
-            let mut on_control = |control, state|
-            {
-                match state
-                {
-                    State::Pressed => {
-                        match control
-                        {
-                            Control::Undo =>
-                            {
-                                self.image.undo();
-                            },
-                            Control::Draw | Control::Erase =>
-                            {
-                                self.image.add_undo();
-                            },
-                            _ => ()
-                        }
-
-                        self.controls.set_control_down(control);
-                    },
-                    State::Released =>
-                    {
-                        match control
-                        {
-                            Control::Draw | Control::Erase =>
-                            {
-                                self.previous_draw = None;
-                            },
-                            _ => ()
-                        }
-
-                        self.controls.set_control_up(control);
-                    }
-                }
-            };
-
-            for event in self.events.poll_iter()
+            for event in events.poll_iter()
             {
                 match event
                 {
@@ -972,33 +995,35 @@ impl DrawerWindow
                     {
                         if let Some(key) = Controls::key_to_control(ControlRaw::Keyboard(key))
                         {
-                            on_control(key, State::Pressed);
+                            self.on_control(key, State::Pressed);
                         }
                     },
                     Event::KeyUp{keycode: Some(key), repeat: false, ..} =>
                     {
                         if let Some(key) = Controls::key_to_control(ControlRaw::Keyboard(key))
                         {
-                            on_control(key, State::Released);
+                            self.on_control(key, State::Released);
                         }
                     },
                     Event::MouseButtonDown{mouse_btn: button, ..} =>
                     {
                         if let Some(key) = Controls::key_to_control(ControlRaw::Mouse(button))
                         {
-                            on_control(key, State::Pressed);
+                            self.on_control(key, State::Pressed);
                         }
                     },
                     Event::MouseButtonUp{mouse_btn: button, ..} =>
                     {
                         if let Some(key) = Controls::key_to_control(ControlRaw::Mouse(button))
                         {
-                            on_control(key, State::Released);
+                            self.on_control(key, State::Released);
                         }
                     },
                     Event::MouseMotion{x, y, ..} =>
                     {
                         self.mouse_position = Point2{x, y};
+
+                        self.ui.mouse_move(self.mouse_normalized());
                     },
                     Event::Window{win_event, ..} =>
                     {
@@ -1351,9 +1376,14 @@ fn main()
 
     let image = Image::from(image);
 
-    let mut window = DrawerWindow::new(image, config.billinear);
+    let ctx = sdl2::init().unwrap();
 
-    window.wait_exit();
+    // i hate the sdl rust api i hate the sdl rust api i hate the sdl rust api
+    let mut events = ctx.event_pump().unwrap();
+
+    let mut window = DrawerWindow::new(ctx, image, config.billinear);
+
+    window.wait_exit(&mut events);
 
     window.image().save(config.output).expect("saving must work");
 }

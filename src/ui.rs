@@ -9,42 +9,52 @@ use sdl2::rect::Rect;
 use crate::{Point2, WindowWrapper, Assets, TextureId, animator::Animatable};
 
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ComplexId(usize);
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ElementId
 {
     Primitive(ElementPrimitiveId),
-    Complex(ComplexElement)
+    Complex(ComplexId)
+}
+
+impl<'a> TryFrom<&'a ElementId> for &'a ElementPrimitiveId
+{
+    type Error = ();
+
+    fn try_from(id: &ElementId) -> Result<&ElementPrimitiveId, Self::Error>
+    {
+        match id
+        {
+            ElementId::Primitive(x) => Ok(x),
+            _ => Err(())
+        }
+    }
+}
+
+impl TryFrom<&ElementId> for ComplexId
+{
+    type Error = ();
+
+    fn try_from(id: &ElementId) -> Result<Self, Self::Error>
+    {
+        match id
+        {
+            ElementId::Complex(x) => Ok(*x),
+            _ => Err(())
+        }
+    }
 }
 
 impl ElementId
 {
-    fn into_primitive_id(self) -> ElementPrimitiveId
+    fn primitive_id<'a>(&'a self, ui: &'a Ui) -> &'a ElementPrimitiveId
     {
         match self
         {
             Self::Primitive(x) => x,
-            Self::Complex(complex) =>
-            {
-                match complex
-                {
-                    ComplexElement::Scroll(x) => x.body_id
-                }
-            }
-        }
-    }
-
-    fn primitive_id(&self) -> &ElementPrimitiveId
-    {
-        match self
-        {
-            Self::Primitive(x) => x,
-            Self::Complex(complex) =>
-            {
-                match complex
-                {
-                    ComplexElement::Scroll(x) => &x.body_id
-                }
-            }
+            Self::Complex(x) => ui.complex_to_primitive(*x)
         }
     }
 }
@@ -60,7 +70,7 @@ impl TopLevelAdder for TopLevelAdderNormal
 {
     fn add(&self, ui: &mut Ui, element: UiElementPrimitive) -> ElementPrimitiveId
     {
-        ui.push(element).into_primitive_id()
+        ui.push(element).primitive_id(ui).clone()
     }
 }
 
@@ -73,7 +83,7 @@ impl<'a> TopLevelAdder for TopLevelAdderChild<'a>
 {
     fn add(&self, ui: &mut Ui, element: UiElementPrimitive) -> ElementPrimitiveId
     {
-        ui.push_child(self.parent, element).into_primitive_id()
+        ui.push_child(self.parent, element).primitive_id(ui).clone()
     }
 }
 
@@ -100,12 +110,12 @@ impl<'a, T: TopLevelAdder> ElementAdder<'a, T>
 pub struct ScrollElement
 {
     held: bool,
+    dragging: bool,
     scroll: f32,
-    body: Rc<RefCell<UiElementInner>>,
+    body: Rc<RefCell<UiPrimitive>>,
     body_id: ElementPrimitiveId,
-    bar: Rc<RefCell<UiElementInner>>,
-    bar_id: ElementPrimitiveId,
-    background: ElementPrimitiveId
+    bar_rail: Rc<RefCell<UiPrimitive>>,
+    bar: Rc<RefCell<UiPrimitive>>
 }
 
 impl PartialEq for ScrollElement
@@ -130,31 +140,41 @@ impl ScrollElement
             texture: None
         });
 
-        let background = adder.child(&body_id, UiElementPrimitive{
-            kind: UiElementType::Button,
+        let _background = adder.child(&body_id, UiElementPrimitive{
+            kind: UiElementType::Panel,
             pos: Point2::repeat(0.0),
             size: Point2::repeat(1.0).into(),
             texture: Some(info.background)
         });
 
-        let bar_id = adder.child(&body_id, UiElementPrimitive{
+        let rail_size = 1.0 - info.bar_size;
+
+        let bar_rail_id = adder.child(&body_id, UiElementPrimitive{
             kind: UiElementType::Button,
+            pos: Point2{x: 0.0, y: (1.0 - rail_size) * 0.5},
+            size: Point2{x: 1.0, y: rail_size}.into(),
+            texture: None
+        });
+
+        let bar_id = adder.child(&bar_rail_id, UiElementPrimitive{
+            kind: UiElementType::Panel,
             pos: Point2::repeat(0.0),
-            size: KeepAspect::from(Point2{x: 1.0, y: 1.0}).into(),
+            size: Point2{x: 1.0, y: info.bar_size / rail_size}.into(),
             texture: Some(info.scrollbar)
         });
 
-        let body = adder.ui.get_inner(&body_id);
-        let bar = adder.ui.get_inner(&bar_id);
+        let body = adder.ui.get_primitive(&body_id);
+        let bar_rail = adder.ui.get_primitive(&bar_rail_id);
+        let bar = adder.ui.get_primitive(&bar_id);
 
         Self{
             held: false,
+            dragging: false,
             scroll: 0.0,
             body,
             body_id,
-            bar,
-            bar_id,
-            background
+            bar_rail,
+            bar
         }
     }
 
@@ -163,48 +183,57 @@ impl ScrollElement
         self.scroll
     }
 
-    fn set_scroll(&mut self, ui: &Ui, new_scroll: f32)
+    fn set_scroll(&mut self, new_scroll: f32)
     {
         self.scroll = new_scroll;
 
-        self.update_bar(ui);
+        self.update_bar();
     }
 
-    fn update_bar(&mut self, ui: &Ui)
+    fn update_bar(&mut self)
     {
         self.bar.set(&UiAnimatableId::PositionCenteredY, self.scroll);
     }
 
-    fn mouse_move(&mut self, ui: &Ui, pos: Point2<f32>)
+    fn mouse_move(&mut self, pos: Point2<f32>)
     {
-        if self.held
+        if self.dragging
         {
-            let inside_pos = self.body.borrow().element().inside_position(pos);
-            if let Some(pos) = inside_pos
-            {
-                self.set_scroll(ui, pos.y);
-            }
+            let pos = self.bar_rail.borrow().element().local_position(pos);
+
+            self.set_scroll(pos.y.clamp(0.0, 1.0));
         }
     }
 
-    fn key_down(&mut self)
+    fn mouse_state(&mut self, down: bool, pos: Point2<f32>)
     {
-        self.held = true;
-    }
+        self.held = down;
 
-    fn key_up(&mut self)
-    {
-        self.held = false;
+        if down
+        {
+            let inside = self.bar_rail.borrow().element().intersects(pos);
+            let edge = self.body.borrow().element().intersects(pos);
+
+            if inside || edge
+            {
+                self.dragging = true;
+            }
+
+            self.mouse_move(pos);
+        } else
+        {
+            self.dragging = false;
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ComplexElement
+pub enum UiComplex
 {
     Scroll(ScrollElement)
 }
 
-impl ComplexElement
+impl UiComplex
 {
     fn new_with<T: TopLevelAdder>(
         value: UiElementComplex,
@@ -214,6 +243,22 @@ impl ComplexElement
         match value
         {
             UiElementComplex::Scroll(x) => Self::Scroll(ScrollElement::new_with(x, adder))
+        }
+    }
+
+    fn mouse_move(&mut self, pos: Point2<f32>)
+    {
+        match self
+        {
+            Self::Scroll(x) => x.mouse_move(pos)
+        }
+    }
+
+    fn mouse_state(&mut self, down: bool, pos: Point2<f32>)
+    {
+        match self
+        {
+            Self::Scroll(x) => x.mouse_state(down, pos)
         }
     }
 }
@@ -414,6 +459,7 @@ pub struct ScrollElementInfo
 {
     pub pos: Point2<f32>,
     pub size: UiSize,
+    pub bar_size: f32,
     pub background: TextureId,
     pub scrollbar: TextureId
 }
@@ -426,14 +472,26 @@ pub enum UiElementComplex
 
 impl UiElementComplex
 {
-    fn new(self, ui: &mut Ui) -> ComplexElement
+    fn new(self, ui: &mut Ui) -> ComplexId
     {
-        ComplexElement::new_with(self, ElementAdder{ui, adder: TopLevelAdderNormal})
+        let element = UiComplex::new_with(self, ElementAdder{ui, adder: TopLevelAdderNormal});
+
+        Self::into_id(ui, element)
     }
 
-    fn new_child(self, ui: &mut Ui, parent: &ElementId) -> ComplexElement
+    fn new_child(self, ui: &mut Ui, parent: &ElementId) -> ComplexId
     {
-        ComplexElement::new_with(self, ElementAdder{ui, adder: TopLevelAdderChild{parent}})
+        let element = UiComplex::new_with(
+            self,
+            ElementAdder{ui, adder: TopLevelAdderChild{parent}}
+        );
+
+        Self::into_id(ui, element)
+    }
+
+    fn into_id(ui: &mut Ui, element: UiComplex) -> ComplexId
+    {
+        ui.push_complex(element)
     }
 }
 
@@ -450,24 +508,24 @@ impl UiElementPrimitive
 {
     fn new(self, ui: &mut Ui) -> ElementPrimitiveId
     {
-        let id = ui.elements.len();
+        let id = ui.ui.elements.len();
 
-        let element = UiElementInner::new_parent(self);
-        UiElementInner::full_update(element.clone(), ui.aspect());
+        let element = UiPrimitive::new_parent(self);
+        UiPrimitive::full_update(element.clone(), ui.aspect());
 
-        ui.elements.push(element);
+        ui.ui.elements.push(element);
 
         ElementPrimitiveId::new(id)
     }
 
     fn new_child(self, ui: &Ui, parent: &ElementId) -> ElementPrimitiveId
     {
-        self.new_child_inner(ui, parent.primitive_id())
+        self.new_child_inner(ui, parent.primitive_id(ui))
     }
 
     fn new_child_inner(self, ui: &Ui, parent: &ElementPrimitiveId) -> ElementPrimitiveId
     {
-        let id = UiElementInner::push(&ui.get_inner(parent), self, ui.aspect());
+        let id = UiPrimitive::push(&ui.get_primitive(parent), self, ui.aspect());
 
         parent.push(id)
     }
@@ -489,12 +547,14 @@ impl UiElementGlobal
             && (self.global_pos.y..=(self.global_pos.y + self.global_size.y)).contains(&pos.y)
     }
 
+    pub fn local_position(&self, pos: Point2<f32>) -> Point2<f32>
+    {
+        (pos - self.global_pos) / self.global_size
+    }
+
     pub fn inside_position(&self, pos: Point2<f32>) -> Option<Point2<f32>>
     {
-        self.intersects(pos).then(||
-        {
-            (pos - self.global_pos) / self.global_size
-        })
+        self.intersects(pos).then(|| self.local_position(pos))
     }
 
     fn set_aspect(&mut self, aspect: f32)
@@ -516,14 +576,14 @@ pub enum UiAnimatableId
 }
 
 #[derive(Debug)]
-pub struct UiElementInner
+pub struct UiPrimitive
 {
     parent: Option<(usize, Weak<RefCell<Self>>)>,
     element: UiElementGlobal,
     children: Vec<Rc<RefCell<Self>>>
 }
 
-impl UiElementInner
+impl UiPrimitive
 {
     #[allow(dead_code)]
     pub fn texture(&mut self) -> &mut Option<TextureId>
@@ -693,7 +753,7 @@ impl UiElementInner
     }
 }
 
-impl Animatable<UiAnimatableId> for Rc<RefCell<UiElementInner>>
+impl Animatable<UiAnimatableId> for Rc<RefCell<UiPrimitive>>
 {
     fn set(&mut self, id: &UiAnimatableId, value: f32)
     {
@@ -731,15 +791,22 @@ impl Animatable<UiAnimatableId> for Rc<RefCell<UiElementInner>>
             }
         }
 
-        UiElementInner::update(self.clone());
+        UiPrimitive::update(self.clone());
     }
+}
+
+struct UiGeneral
+{
+    window: Rc<RefCell<WindowWrapper>>,
+    assets: Rc<RefCell<Assets>>,
+    elements: Vec<Rc<RefCell<UiPrimitive>>>
 }
 
 pub struct Ui
 {
-    window: Rc<RefCell<WindowWrapper>>,
-    assets: Rc<RefCell<Assets>>,
-    elements: Vec<Rc<RefCell<UiElementInner>>>
+    complex: Vec<UiComplex>,
+    // i thought i needed a separate reference but im stupid ahhhhhhh, wutever
+    ui: UiGeneral
 }
 
 #[allow(dead_code)]
@@ -747,7 +814,13 @@ impl Ui
 {
     pub fn new(window: Rc<RefCell<WindowWrapper>>, assets: Rc<RefCell<Assets>>) -> Self
     {
-        Self{window, assets, elements: Vec::new()}
+        let ui = UiGeneral{
+            window,
+            assets,
+            elements: Vec::new()
+        };
+
+        Self{complex: Vec::new(), ui}
     }
 
     pub fn push(&mut self, element: impl Into<UiElement>) -> ElementId
@@ -764,16 +837,20 @@ impl Ui
         element.into().new_child(self, parent_id)
     }
 
-    pub fn get(&self, id: &ElementId) -> Rc<RefCell<UiElementInner>>
+    pub fn get(&self, id: &ElementId) -> Rc<RefCell<UiPrimitive>>
     {
-        let id = id.primitive_id();
+        let id = id.primitive_id(self);
 
-        self.get_inner(id)
+        self.get_primitive(id)
     }
 
-    fn get_inner(&self, id: &ElementPrimitiveId) -> Rc<RefCell<UiElementInner>>
+    pub fn get_primitive<'a>(
+        &self,
+        id: impl TryInto<&'a ElementPrimitiveId>
+    ) -> Rc<RefCell<UiPrimitive>>
     {
-        let this = &self.elements[id.id];
+        let id = id.try_into().unwrap_or_else(|_| panic!("id isnt primitive"));
+        let this = &self.ui.elements[id.id];
 
         if let Some(child_id) = id.child.as_ref()
         {
@@ -782,6 +859,31 @@ impl Ui
         {
             this.clone()
         }
+    }
+
+    pub fn get_complex(&self, id: impl TryInto<ComplexId>) -> &UiComplex
+    {
+        let id = id.try_into().unwrap_or_else(|_| panic!("id isnt primitive"));
+        &self.complex[id.0]
+    }
+
+    fn complex_to_primitive(&self, id: ComplexId) -> &ElementPrimitiveId
+    {
+        let complex = self.get_complex(id);
+
+        match complex
+        {
+            UiComplex::Scroll(x) => &x.body_id
+        }
+    }
+
+    fn push_complex(&mut self, element: UiComplex) -> ComplexId
+    {
+        let id = self.complex.len();
+
+        self.complex.push(element);
+
+        ComplexId(id)
     }
 
     pub fn pixels_size(&self, id: &ElementId) -> Point2<u32>
@@ -807,14 +909,14 @@ impl Ui
 
     fn window_size(&self) -> Point2<u32>
     {
-        self.window.borrow().window_size()
+        self.ui.window.borrow().window_size()
     }
 
     pub fn resized(&mut self)
     {
-        for element in self.elements.iter()
+        for element in self.ui.elements.iter()
         {
-            UiElementInner::full_update(element.clone(), self.aspect());
+            UiPrimitive::full_update(element.clone(), self.aspect());
         }
     }
 
@@ -822,7 +924,7 @@ impl Ui
     {
         let window_size = self.window_size().map(|x| x as f32);
 
-        let assets = self.assets.borrow();
+        let assets = self.ui.assets.borrow();
 
         self.for_each_element(|_id, element|
         {
@@ -843,22 +945,45 @@ impl Ui
 
                 let Point2{x: width, y: height} = self.pixels_size_inner(element);
 
-                self.window.borrow_mut().canvas
+                self.ui.window.borrow_mut().canvas
                     .copy(texture, None, Rect::new(x, y, width, height))
                     .unwrap();
             }
         });
     }
 
-    pub fn click(&self, pos: Point2<f32>) -> Option<UiEvent>
+    pub fn mouse_move(&mut self, pos: Point2<f32>)
     {
+        self.complex.iter_mut().for_each(|complex|
+        {
+            complex.mouse_move(pos);
+        });
+    }
+
+    pub fn mouse_down(&mut self, pos: Point2<f32>) -> Option<UiEvent>
+    {
+        self.mouse_state(true, pos)
+    }
+
+    pub fn mouse_up(&mut self, pos: Point2<f32>) -> Option<UiEvent>
+    {
+        self.mouse_state(false, pos)
+    }
+
+    pub fn mouse_state(&mut self, down: bool, pos: Point2<f32>) -> Option<UiEvent>
+    {
+        self.complex.iter_mut().for_each(|complex|
+        {
+            complex.mouse_state(down, pos);
+        });
+
         let flow = self.try_for_each_element(|id, element|
         {
             match element.inner.kind
             {
                 UiElementType::Button =>
                 {
-                    if element.intersects(pos)
+                    if down && element.intersects(pos)
                     {
                         return ControlFlow::Break(UiEvent{element_id: id.clone()});
                     }
@@ -880,7 +1005,7 @@ impl Ui
     where
         F: FnMut(&ElementPrimitiveId, &UiElementGlobal) -> ControlFlow<T>
     {
-        self.elements.iter().enumerate().try_for_each(|(index, element)|
+        self.ui.elements.iter().enumerate().try_for_each(|(index, element)|
         {
             let id = ElementPrimitiveId::new(index);
 
