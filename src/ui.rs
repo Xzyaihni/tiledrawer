@@ -1,7 +1,7 @@
 use std::{
     rc::{Weak, Rc},
     cell::{Ref, RefCell},
-    ops::ControlFlow
+    ops::{Range, ControlFlow}
 };
 
 use sdl2::rect::Rect;
@@ -239,7 +239,7 @@ impl ScrollElement
 
     fn update_bar(&mut self)
     {
-        self.bar.set(&UiAnimatableId::PositionCenteredY, self.scroll);
+        self.bar.set(UiAnimatableId::PositionCenteredY, self.scroll);
     }
 
     fn mouse_move(&mut self, pos: Point2<f32>)
@@ -275,12 +275,22 @@ impl ScrollElement
 }
 
 #[derive(Debug, Clone)]
+struct Item
+{
+    frame: Rc<RefCell<UiPrimitive>>,
+    value: Rc<RefCell<UiPrimitive>>
+}
+
+#[derive(Debug, Clone)]
 pub struct ListElement
 {
-    items: Vec<ElementPrimitiveId>,
+    items: Vec<Item>,
+    background: Rc<RefCell<UiPrimitive>>,
     body_id: ElementPrimitiveId,
     scroll: Rc<RefCell<UiComplex>>,
-    last_scroll: f32
+    item_height: f32,
+    last_scroll: f32,
+    draw_range: Range<usize>
 }
 
 impl PartialEq for ListElement
@@ -333,7 +343,7 @@ impl ListElement
             pos: Point2{x: 0.0, y: 0.0},
             size: Point2{x: 1.0 - scrollbar_width, y: 1.0}.into(),
             texture: Some(info.background)
-        }.default_flags().clipped()/*.no_draw()*/);
+        }.default_flags().clipped().no_draw());
 
         let items = info.items.into_iter().map(|element|
         {
@@ -344,20 +354,34 @@ impl ListElement
                 texture: None
             });
 
-            adder.child(&container, element)
+            let id = adder.child(&container, element);
+
+            Item{
+                frame: adder.ui.get_primitive(&container).clone(),
+                value: adder.ui.get_primitive(&id).clone()
+            }
         }).collect();
 
-        Self{
+        let background = adder.ui.get_primitive(&background_id).clone();
+
+        let mut this = Self{
             items,
+            background,
             body_id,
-            last_scroll: Self::get_scroll_assoc(&scroll),
-            scroll
-        }
+            item_height: info.item_height,
+            last_scroll: 0.0,
+            scroll,
+            draw_range: 0..0
+        };
+
+        this.update_scroll(this.get_scroll());
+
+        this
     }
 
-    fn get_scroll_assoc(scroll: &Rc<RefCell<UiComplex>>) -> f32
+    fn get_scroll(&self) -> f32
     {
-        let scroll = scroll.borrow();
+        let scroll = self.scroll.borrow();
 
         match &*scroll
         {
@@ -366,20 +390,49 @@ impl ListElement
         }
     }
 
-    fn get_scroll(&self) -> f32
+    fn drawing_range(&self) -> Range<usize>
     {
-        Self::get_scroll_assoc(&self.scroll)
+        let fits = 1.0 / self.item_height;
+
+        let height = 1.0 - self.last_scroll;
+
+        let last_item = self.items.len().saturating_sub(fits as usize);
+        let start_index = (height * last_item as f32) as usize;
+
+        start_index..(start_index + fits.ceil() as usize)
     }
 
-    fn mouse_move(&mut self, ui: &Ui, pos: Point2<f32>)
+    fn draw_custom(&self, ui: &Ui)
+    {
+        ui.draw_element(&self.background.borrow().element);
+
+        self.items[self.draw_range.clone()].iter().for_each(|item|
+        {
+            ui.draw_element(&item.value.borrow().element);
+        });
+    }
+
+    fn update_scroll(&mut self, scroll: f32)
+    {
+        self.last_scroll = scroll;
+        self.draw_range = self.drawing_range();
+
+        self.items[self.draw_range.clone()].iter_mut().enumerate().for_each(|(index, item)|
+        {
+            let y = index as f32 * self.item_height;
+
+            item.frame.set(UiAnimatableId::PositionY, 1.0 - y - self.item_height);
+        });
+    }
+
+    // i dont know if i need the &Ui anymore, im too tired of constantly removing it
+    fn mouse_move(&mut self, _ui: &Ui, _pos: Point2<f32>)
     {
         let scroll = self.get_scroll();
 
         if self.last_scroll != scroll
         {
-            dbg!(scroll);
-
-            self.last_scroll = scroll;
+            self.update_scroll(scroll);
         }
     }
 
@@ -407,6 +460,15 @@ impl UiComplex
         {
             UiElementComplex::Scroll(x) => Self::Scroll(ScrollElement::new_with(x, &mut adder)),
             UiElementComplex::List(x) => Self::List(ListElement::new_with(x, &mut adder))
+        }
+    }
+
+    fn draw_custom(&self, ui: &Ui)
+    {
+        match self
+        {
+            Self::List(x) => x.draw_custom(ui),
+            _ => ()
         }
     }
 
@@ -1027,7 +1089,7 @@ impl UiPrimitive
 
 impl Animatable<UiAnimatableId> for Rc<RefCell<UiPrimitive>>
 {
-    fn set(&mut self, id: &UiAnimatableId, value: f32)
+    fn set(&mut self, id: UiAnimatableId, value: f32)
     {
         {
             let mut this = self.borrow_mut();
@@ -1196,38 +1258,48 @@ impl Ui
         }
     }
 
-    pub fn draw(&self)
+    fn draw_element(&self, element: &UiElementGlobal)
     {
         let window_size = self.window_size().map(|x| x as f32);
 
         let assets = self.ui.assets.borrow();
 
+        if let Some(texture_id) = element.inner.texture
+        {
+            let texture = assets.texture(texture_id);
+
+            let scaled_pos = {
+                let mut pos = element.global_pos;
+
+                pos.y = 1.0 - pos.y - element.global_size.y;
+
+                pos * window_size
+            }.map(|x| x.round() as i32);
+
+            let x = scaled_pos.x;
+            let y = scaled_pos.y;
+
+            let Point2{x: width, y: height} = self.pixels_size_inner(element);
+
+            self.ui.window.borrow_mut().canvas
+                .copy(texture, None, Rect::new(x, y, width, height))
+                .unwrap();
+        }
+    }
+
+    pub fn draw(&self)
+    {
         self.for_each_element(&|element|
         {
             !element.element.flags.no_draw
         }, |_id, element|
         {
-            if let Some(texture_id) = element.inner.texture
-            {
-                let texture = assets.texture(texture_id);
+            self.draw_element(element);
+        });
 
-                let scaled_pos = {
-                    let mut pos = element.global_pos;
-
-                    pos.y = 1.0 - pos.y - element.global_size.y;
-
-                    pos * window_size
-                }.map(|x| x.round() as i32);
-
-                let x = scaled_pos.x;
-                let y = scaled_pos.y;
-
-                let Point2{x: width, y: height} = self.pixels_size_inner(element);
-
-                self.ui.window.borrow_mut().canvas
-                    .copy(texture, None, Rect::new(x, y, width, height))
-                    .unwrap();
-            }
+        self.complex.iter().for_each(|complex|
+        {
+            complex.borrow().draw_custom(self);
         });
     }
 

@@ -4,9 +4,9 @@ use std::{
 };
 
 
-pub trait Animatable<T>
+pub trait Animatable<T: Clone>
 {
-    fn set(&mut self, id: &T, value: f32);
+    fn set(&mut self, id: T, value: f32);
 }
 
 #[derive(Debug, Clone)]
@@ -90,7 +90,7 @@ pub struct Animator<T>
 }
 
 #[allow(dead_code)]
-impl<T> Animator<T>
+impl<T: Clone> Animator<T>
 {
     pub fn new(values: Vec<AnimatedValue<T>>, duration: Duration) -> Self
     {
@@ -137,7 +137,7 @@ impl<T> Animator<T>
 
             let value = Self::lerp(&anim_value.range, point);
 
-            animatable.set(&anim_value.id, value);
+            animatable.set(anim_value.id.clone(), value);
         });
 
         if timepoint >= 1.0

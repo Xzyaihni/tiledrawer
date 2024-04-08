@@ -887,8 +887,8 @@ impl DrawerWindow
     {
         let mut cursor = self.ui.get(&self.ui_group.selector_1d_cursor);
 
-        cursor.set(&UiAnimatableId::PositionCenteredX, 0.5);
-        cursor.set(&UiAnimatableId::PositionCenteredY, 1.0 - self.color_slider);
+        cursor.set(UiAnimatableId::PositionCenteredX, 0.5);
+        cursor.set(UiAnimatableId::PositionCenteredY, 1.0 - self.color_slider);
     }
 
     fn update_2d_cursor(&mut self)
@@ -896,8 +896,8 @@ impl DrawerWindow
         let mut cursor = self.ui.get(&self.ui_group.selector_2d_cursor);
 
         let position = self.color_position;
-        cursor.set(&UiAnimatableId::PositionCenteredX, position.x);
-        cursor.set(&UiAnimatableId::PositionCenteredY, 1.0 - position.y);
+        cursor.set(UiAnimatableId::PositionCenteredX, position.x);
+        cursor.set(UiAnimatableId::PositionCenteredY, 1.0 - position.y);
     }
 
     fn update_cursor(&mut self)
@@ -911,8 +911,8 @@ impl DrawerWindow
 
         let cursor_size = single_pixel * 1.2;
 
-        cursor.set(&UiAnimatableId::ScaleX, cursor_size);
-        cursor.set(&UiAnimatableId::ScaleY, cursor_size);
+        cursor.set(UiAnimatableId::ScaleX, cursor_size);
+        cursor.set(UiAnimatableId::ScaleY, cursor_size);
 
         if let Some(pos) = self.mouse_image()
         {
@@ -921,8 +921,8 @@ impl DrawerWindow
             let offset = single_pixel * 0.1;
             let pos = pos + Point2{x: -offset, y: offset};
 
-            cursor.set(&UiAnimatableId::PositionX, pos.x);
-            cursor.set(&UiAnimatableId::PositionY, 1.0 - pos.y);
+            cursor.set(UiAnimatableId::PositionX, pos.x);
+            cursor.set(UiAnimatableId::PositionY, 1.0 - pos.y);
         }
     }
 
