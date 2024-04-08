@@ -407,9 +407,13 @@ impl ListElement
 
     fn drawing_range(&self) -> Range<usize>
     {
-        let start_index = self.start_index() as usize;
+        let start_index = self.start_index();
 
-        let end_index = (start_index + self.fits() as usize + 1).min(self.items.len());
+        let offset = start_index.fract();
+        let start_index = start_index as usize;
+
+        let len = (self.fits() + offset).ceil() as usize;
+        let end_index = (start_index + len).min(self.items.len());
 
         start_index..end_index
     }
