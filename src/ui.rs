@@ -279,7 +279,7 @@ pub struct ListElement
 {
     items: Vec<ElementPrimitiveId>,
     body_id: ElementPrimitiveId,
-    scroll: ComplexId,
+    scroll: Rc<RefCell<UiComplex>>,
     last_scroll: f32
 }
 
@@ -317,6 +317,7 @@ impl ListElement
         });
 
         let scroll = scroll.new_child(&mut adder.ui, &body_id);
+        let scroll = adder.ui.get_complex(scroll).clone();
 
         // insanity
         let body_id = if let ElementId::Primitive(x) = body_id
@@ -349,24 +350,42 @@ impl ListElement
         Self{
             items,
             body_id,
-            scroll,
-            last_scroll: todo!()
+            last_scroll: Self::get_scroll_assoc(&scroll),
+            scroll
         }
     }
 
-    fn mouse_move(&mut self, pos: Point2<f32>)
+    fn get_scroll_assoc(scroll: &Rc<RefCell<UiComplex>>) -> f32
     {
-        /*let scroll = self.;
+        let scroll = scroll.borrow();
+
+        match &*scroll
+        {
+            UiComplex::Scroll(x) => x.scroll(),
+            _ => unreachable!()
+        }
+    }
+
+    fn get_scroll(&self) -> f32
+    {
+        Self::get_scroll_assoc(&self.scroll)
+    }
+
+    fn mouse_move(&mut self, ui: &Ui, pos: Point2<f32>)
+    {
+        let scroll = self.get_scroll();
 
         if self.last_scroll != scroll
         {
+            dbg!(scroll);
+
             self.last_scroll = scroll;
-        }*/
+        }
     }
 
-    fn mouse_state(&mut self, _down: bool, pos: Point2<f32>)
+    fn mouse_state(&mut self, ui: &Ui, _down: bool, pos: Point2<f32>)
     {
-        self.mouse_move(pos)
+        self.mouse_move(ui, pos)
     }
 }
 
@@ -391,21 +410,21 @@ impl UiComplex
         }
     }
 
-    fn mouse_move(&mut self, pos: Point2<f32>)
+    fn mouse_move(&mut self, ui: &Ui, pos: Point2<f32>)
     {
         match self
         {
             Self::Scroll(x) => x.mouse_move(pos),
-            Self::List(x) => x.mouse_move(pos)
+            Self::List(x) => x.mouse_move(ui, pos)
         }
     }
 
-    fn mouse_state(&mut self, down: bool, pos: Point2<f32>)
+    fn mouse_state(&mut self, ui: &Ui, down: bool, pos: Point2<f32>)
     {
         match self
         {
             Self::Scroll(x) => x.mouse_state(down, pos),
-            Self::List(x) => x.mouse_state(down, pos)
+            Self::List(x) => x.mouse_state(ui, down, pos)
         }
     }
 }
@@ -1216,7 +1235,7 @@ impl Ui
     {
         self.complex.iter().for_each(|complex|
         {
-            complex.borrow_mut().mouse_move(pos);
+            complex.borrow_mut().mouse_move(self, pos);
         });
     }
 
@@ -1234,7 +1253,7 @@ impl Ui
     {
         self.complex.iter().for_each(|complex|
         {
-            complex.borrow_mut().mouse_state(down, pos);
+            complex.borrow_mut().mouse_state(self, down, pos);
         });
 
         let flow = self.try_for_each_element(&|_| true, |id, element|
