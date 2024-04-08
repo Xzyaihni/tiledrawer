@@ -1,6 +1,6 @@
 use std::{
     rc::{Weak, Rc},
-    cell::RefCell,
+    cell::{Ref, RefCell},
     ops::ControlFlow
 };
 
@@ -47,14 +47,57 @@ impl TryFrom<&ElementId> for ComplexId
     }
 }
 
-impl ElementId
+enum PrimitiveIdWrapper<'a>
 {
-    fn primitive_id<'a>(&'a self, ui: &'a Ui) -> &'a ElementPrimitiveId
+    Ref(&'a ElementPrimitiveId),
+    Cell(Ref<'a, ElementPrimitiveId>)
+}
+
+impl<'a> From<&'a ElementPrimitiveId> for PrimitiveIdWrapper<'a>
+{
+    fn from(x: &'a ElementPrimitiveId) -> Self
+    {
+        Self::Ref(x)
+    }
+}
+
+impl<'a> From<Ref<'a, ElementPrimitiveId>> for PrimitiveIdWrapper<'a>
+{
+    fn from(x: Ref<'a, ElementPrimitiveId>) -> Self
+    {
+        Self::Cell(x)
+    }
+}
+
+impl<'a> PrimitiveIdWrapper<'a>
+{
+    fn as_ref(&self) -> &ElementPrimitiveId
     {
         match self
         {
-            Self::Primitive(x) => x,
-            Self::Complex(x) => ui.complex_to_primitive(*x)
+            Self::Ref(x) => x,
+            Self::Cell(x) => &x
+        }
+    }
+
+    fn as_owned(self) -> ElementPrimitiveId
+    {
+        match self
+        {
+            Self::Ref(x) => x.clone(),
+            Self::Cell(x) => x.clone()
+        }
+    }
+}
+
+impl ElementId
+{
+    fn primitive_id<'a>(&'a self, ui: &'a Ui) -> PrimitiveIdWrapper<'a>
+    {
+        match self
+        {
+            Self::Primitive(x) => PrimitiveIdWrapper::Ref(x),
+            Self::Complex(x) => PrimitiveIdWrapper::Cell(ui.complex_to_primitive(*x))
         }
     }
 }
@@ -70,7 +113,7 @@ impl TopLevelAdder for TopLevelAdderNormal
 {
     fn add(&self, ui: &mut Ui, element: UiElementPrimitive) -> ElementPrimitiveId
     {
-        ui.push(element).primitive_id(ui).clone()
+        ui.push(element).primitive_id(ui).as_owned()
     }
 }
 
@@ -83,7 +126,7 @@ impl<'a> TopLevelAdder for TopLevelAdderChild<'a>
 {
     fn add(&self, ui: &mut Ui, element: UiElementPrimitive) -> ElementPrimitiveId
     {
-        ui.push_child(self.parent, element).primitive_id(ui).clone()
+        ui.push_child(self.parent, element).primitive_id(ui).as_owned()
     }
 }
 
@@ -100,9 +143,13 @@ impl<'a, T: TopLevelAdder> ElementAdder<'a, T>
         self.adder.add(self.ui, element)
     }
 
-    fn child(&self, parent: &ElementPrimitiveId, element: UiElementPrimitive) -> ElementPrimitiveId
+    fn child(
+        &self,
+        parent: &ElementPrimitiveId,
+        element: impl Into<UiElementPrimitiveWithFlags>
+    ) -> ElementPrimitiveId
     {
-        element.new_child_inner(self.ui, parent)
+        element.into().new_child_inner(self.ui, parent)
     }
 }
 
@@ -130,7 +177,7 @@ impl ScrollElement
 {
     fn new_with<T: TopLevelAdder>(
         info: ScrollElementInfo,
-        mut adder: ElementAdder<T>
+        adder: &mut ElementAdder<T>
     ) -> Self
     {
         let body_id = adder.top_level(UiElementPrimitive{
@@ -227,22 +274,120 @@ impl ScrollElement
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ListElement
+{
+    items: Vec<ElementPrimitiveId>,
+    body_id: ElementPrimitiveId,
+    scroll: ComplexId,
+    last_scroll: f32
+}
+
+impl PartialEq for ListElement
+{
+    fn eq(&self, other: &Self) -> bool
+    {
+        self.body_id == other.body_id
+    }
+}
+
+impl ListElement
+{
+    fn new_with<T: TopLevelAdder>(
+        info: ListElementInfo,
+        adder: &mut ElementAdder<T>
+    ) -> Self
+    {
+        let body_id = ElementId::Primitive(adder.top_level(UiElementPrimitive{
+            kind: UiElementType::Panel,
+            pos: info.pos,
+            size: info.size,
+            texture: None
+        }));
+
+        let scrollbar_width = 0.1;
+        let bar_size = 0.1;
+
+        let scroll = UiElementComplex::Scroll(ScrollElementInfo{
+            pos: Point2{x: 1.0 - scrollbar_width, y: 0.0},
+            size: Point2{x: scrollbar_width, y: 1.0}.into(),
+            bar_size,
+            background: info.scroll_background,
+            scrollbar: info.scrollbar
+        });
+
+        let scroll = scroll.new_child(&mut adder.ui, &body_id);
+
+        // insanity
+        let body_id = if let ElementId::Primitive(x) = body_id
+        {
+            x
+        } else
+        {
+            unreachable!()
+        };
+
+        let background_id = adder.child(&body_id, UiElementPrimitive{
+            kind: UiElementType::Panel,
+            pos: Point2{x: 0.0, y: 0.0},
+            size: Point2{x: 1.0 - scrollbar_width, y: 1.0}.into(),
+            texture: Some(info.background)
+        }.default_flags().clipped()/*.no_draw()*/);
+
+        let items = info.items.into_iter().map(|element|
+        {
+            let container = adder.child(&background_id, UiElementPrimitive{
+                kind: UiElementType::Panel,
+                pos: Point2{x: 0.0, y: 0.0},
+                size: Point2{x: 1.0, y: info.item_height}.into(),
+                texture: None
+            });
+
+            adder.child(&container, element)
+        }).collect();
+
+        Self{
+            items,
+            body_id,
+            scroll,
+            last_scroll: todo!()
+        }
+    }
+
+    fn mouse_move(&mut self, pos: Point2<f32>)
+    {
+        /*let scroll = self.;
+
+        if self.last_scroll != scroll
+        {
+            self.last_scroll = scroll;
+        }*/
+    }
+
+    fn mouse_state(&mut self, _down: bool, pos: Point2<f32>)
+    {
+        self.mouse_move(pos)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiComplex
 {
-    Scroll(ScrollElement)
+    Scroll(ScrollElement),
+    List(ListElement)
 }
 
 impl UiComplex
 {
     fn new_with<T: TopLevelAdder>(
         value: UiElementComplex,
-        adder: ElementAdder<T>
+        mut adder: ElementAdder<T>
     ) -> Self
     {
         match value
         {
-            UiElementComplex::Scroll(x) => Self::Scroll(ScrollElement::new_with(x, adder))
+            UiElementComplex::Scroll(x) => Self::Scroll(ScrollElement::new_with(x, &mut adder)),
+            UiElementComplex::List(x) => Self::List(ListElement::new_with(x, &mut adder))
         }
     }
 
@@ -250,7 +395,8 @@ impl UiComplex
     {
         match self
         {
-            Self::Scroll(x) => x.mouse_move(pos)
+            Self::Scroll(x) => x.mouse_move(pos),
+            Self::List(x) => x.mouse_move(pos)
         }
     }
 
@@ -258,7 +404,8 @@ impl UiComplex
     {
         match self
         {
-            Self::Scroll(x) => x.mouse_state(down, pos)
+            Self::Scroll(x) => x.mouse_state(down, pos),
+            Self::List(x) => x.mouse_state(down, pos)
         }
     }
 }
@@ -411,17 +558,72 @@ impl UiSize
     }
 }
 
+#[derive(Debug, Clone)]
+struct PrimitiveFlags
+{
+    clipped: bool,
+    no_draw: bool
+}
+
+impl Default for PrimitiveFlags
+{
+    fn default() -> Self
+    {
+        Self{clipped: false, no_draw: false}
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UiElementPrimitiveWithFlags
+{
+    inner: UiElementPrimitive,
+    flags: PrimitiveFlags
+}
+
+impl From<UiElementPrimitive> for UiElementPrimitiveWithFlags
+{
+    fn from(x: UiElementPrimitive) -> Self
+    {
+        x.default_flags()
+    }
+}
+
+impl UiElementPrimitiveWithFlags
+{
+    pub fn clipped(mut self) -> Self
+    {
+        self.flags.clipped = true;
+
+        self
+    }
+
+    pub fn no_draw(mut self) -> Self
+    {
+        self.flags.no_draw = true;
+
+        self
+    }
+}
+
 pub enum UiElement
 {
     Complex(UiElementComplex),
-    Primitive(UiElementPrimitive)
+    Primitive(UiElementPrimitiveWithFlags)
+}
+
+impl From<UiElementPrimitiveWithFlags> for UiElement
+{
+    fn from(x: UiElementPrimitiveWithFlags) -> Self
+    {
+        Self::Primitive(x)
+    }
 }
 
 impl From<UiElementPrimitive> for UiElement
 {
     fn from(x: UiElementPrimitive) -> Self
     {
-        Self::Primitive(x)
+        UiElementPrimitiveWithFlags::from(x).into()
     }
 }
 
@@ -465,9 +667,22 @@ pub struct ScrollElementInfo
 }
 
 #[derive(Debug, Clone)]
+pub struct ListElementInfo
+{
+    pub items: Vec<UiElementPrimitive>,
+    pub pos: Point2<f32>,
+    pub size: UiSize,
+    pub item_height: f32,
+    pub background: TextureId,
+    pub scroll_background: TextureId,
+    pub scrollbar: TextureId
+}
+
+#[derive(Debug, Clone)]
 pub enum UiElementComplex
 {
-    Scroll(ScrollElementInfo)
+    Scroll(ScrollElementInfo),
+    List(ListElementInfo)
 }
 
 impl UiElementComplex
@@ -491,7 +706,7 @@ impl UiElementComplex
 
     fn into_id(ui: &mut Ui, element: UiComplex) -> ComplexId
     {
-        ui.push_complex(element)
+        ui.push_complex(Rc::new(RefCell::new(element)))
     }
 }
 
@@ -505,6 +720,17 @@ pub struct UiElementPrimitive
 }
 
 impl UiElementPrimitive
+{
+    pub fn default_flags(self) -> UiElementPrimitiveWithFlags
+    {
+        UiElementPrimitiveWithFlags{
+            inner: self,
+            flags: Default::default()
+        }
+    }
+}
+
+impl UiElementPrimitiveWithFlags
 {
     fn new(self, ui: &mut Ui) -> ElementPrimitiveId
     {
@@ -523,8 +749,15 @@ impl UiElementPrimitive
         self.new_child_inner(ui, parent.primitive_id(ui))
     }
 
-    fn new_child_inner(self, ui: &Ui, parent: &ElementPrimitiveId) -> ElementPrimitiveId
+    fn new_child_inner<'a>(
+        self,
+        ui: &Ui,
+        parent: impl Into<PrimitiveIdWrapper<'a>>
+    ) -> ElementPrimitiveId
     {
+        let parent = parent.into();
+        let parent = parent.as_ref();
+
         let id = UiPrimitive::push(&ui.get_primitive(parent), self, ui.aspect());
 
         parent.push(id)
@@ -535,6 +768,7 @@ impl UiElementPrimitive
 pub struct UiElementGlobal
 {
     inner: UiElementPrimitive,
+    flags: PrimitiveFlags,
     global_size: Point2<f32>,
     global_pos: Point2<f32>
 }
@@ -596,7 +830,7 @@ impl UiPrimitive
         &self.element
     }
 
-    fn new_parent(element: UiElementPrimitive) -> Rc<RefCell<Self>>
+    fn new_parent(element: UiElementPrimitiveWithFlags) -> Rc<RefCell<Self>>
     {
         Self::new_inner(None, element)
     }
@@ -604,7 +838,7 @@ impl UiPrimitive
     fn new_child(
         parent: Weak<RefCell<Self>>,
         id: usize,
-        element: UiElementPrimitive
+        element: UiElementPrimitiveWithFlags
     ) -> Rc<RefCell<Self>>
     {
         Self::new_inner(Some((id, parent)), element)
@@ -612,7 +846,7 @@ impl UiPrimitive
 
     fn new_inner(
         parent: Option<(usize, Weak<RefCell<Self>>)>,
-        element: UiElementPrimitive
+        element: UiElementPrimitiveWithFlags
     ) -> Rc<RefCell<Self>>
     {
         let zero = Point2::<f32>::zero();
@@ -622,13 +856,18 @@ impl UiPrimitive
             element: UiElementGlobal{
                 global_size: zero,
                 global_pos: zero,
-                inner: element
+                inner: element.inner,
+                flags: element.flags
             },
             children: Vec::new()
         }))
     }
 
-    fn push(this: &Rc<RefCell<Self>>, element: UiElementPrimitive, aspect: f32) -> usize
+    fn push(
+        this: &Rc<RefCell<Self>>,
+        element: UiElementPrimitiveWithFlags,
+        aspect: f32
+    ) -> usize
     {
         let parent = this.clone();
 
@@ -734,8 +973,14 @@ impl UiPrimitive
         }
     }
 
-    fn try_for_each_element<T, F>(&self, id: ElementPrimitiveId, f: &mut F) -> ControlFlow<T>
+    fn try_for_each_element<T, Q, F>(
+        &self,
+        query: &Q,
+        id: ElementPrimitiveId,
+        f: &mut F
+    ) -> ControlFlow<T>
     where
+        Q: Fn(&Self) -> bool,
         F: FnMut(&ElementPrimitiveId, &UiElementGlobal) -> ControlFlow<T>
     {
         match f(&id, &self.element)
@@ -746,9 +991,17 @@ impl UiPrimitive
 
         self.children.iter().enumerate().try_for_each(|(index, child)|
         {
-            let id = id.push(index);
+            let child = child.borrow();
 
-            child.borrow().try_for_each_element(id, f)
+            if query(&child)
+            {
+                let id = id.push(index);
+
+                child.try_for_each_element(query, id, f)
+            } else
+            {
+                ControlFlow::Continue(())
+            }
         })
     }
 }
@@ -804,7 +1057,7 @@ struct UiGeneral
 
 pub struct Ui
 {
-    complex: Vec<UiComplex>,
+    complex: Vec<Rc<RefCell<UiComplex>>>,
     // i thought i needed a separate reference but im stupid ahhhhhhh, wutever
     ui: UiGeneral
 }
@@ -841,7 +1094,7 @@ impl Ui
     {
         let id = id.primitive_id(self);
 
-        self.get_primitive(id)
+        self.get_primitive(id.as_ref())
     }
 
     pub fn get_primitive<'a>(
@@ -861,23 +1114,27 @@ impl Ui
         }
     }
 
-    pub fn get_complex(&self, id: impl TryInto<ComplexId>) -> &UiComplex
+    pub fn get_complex(&self, id: impl TryInto<ComplexId>) -> &Rc<RefCell<UiComplex>>
     {
         let id = id.try_into().unwrap_or_else(|_| panic!("id isnt primitive"));
         &self.complex[id.0]
     }
 
-    fn complex_to_primitive(&self, id: ComplexId) -> &ElementPrimitiveId
+    fn complex_to_primitive(&self, id: ComplexId) -> Ref<ElementPrimitiveId>
     {
         let complex = self.get_complex(id);
 
-        match complex
+        Ref::map(complex.borrow(), |complex|
         {
-            UiComplex::Scroll(x) => &x.body_id
-        }
+            match complex
+            {
+                UiComplex::Scroll(x) => &x.body_id,
+                UiComplex::List(x) => &x.body_id
+            }
+        })
     }
 
-    fn push_complex(&mut self, element: UiComplex) -> ComplexId
+    fn push_complex(&mut self, element: Rc<RefCell<UiComplex>>) -> ComplexId
     {
         let id = self.complex.len();
 
@@ -926,7 +1183,10 @@ impl Ui
 
         let assets = self.ui.assets.borrow();
 
-        self.for_each_element(|_id, element|
+        self.for_each_element(&|element|
+        {
+            !element.element.flags.no_draw
+        }, |_id, element|
         {
             if let Some(texture_id) = element.inner.texture
             {
@@ -952,32 +1212,32 @@ impl Ui
         });
     }
 
-    pub fn mouse_move(&mut self, pos: Point2<f32>)
+    pub fn mouse_move(&self, pos: Point2<f32>)
     {
-        self.complex.iter_mut().for_each(|complex|
+        self.complex.iter().for_each(|complex|
         {
-            complex.mouse_move(pos);
+            complex.borrow_mut().mouse_move(pos);
         });
     }
 
-    pub fn mouse_down(&mut self, pos: Point2<f32>) -> Option<UiEvent>
+    pub fn mouse_down(&self, pos: Point2<f32>) -> Option<UiEvent>
     {
         self.mouse_state(true, pos)
     }
 
-    pub fn mouse_up(&mut self, pos: Point2<f32>) -> Option<UiEvent>
+    pub fn mouse_up(&self, pos: Point2<f32>) -> Option<UiEvent>
     {
         self.mouse_state(false, pos)
     }
 
-    pub fn mouse_state(&mut self, down: bool, pos: Point2<f32>) -> Option<UiEvent>
+    pub fn mouse_state(&self, down: bool, pos: Point2<f32>) -> Option<UiEvent>
     {
-        self.complex.iter_mut().for_each(|complex|
+        self.complex.iter().for_each(|complex|
         {
-            complex.mouse_state(down, pos);
+            complex.borrow_mut().mouse_state(down, pos);
         });
 
-        let flow = self.try_for_each_element(|id, element|
+        let flow = self.try_for_each_element(&|_| true, |id, element|
         {
             match element.inner.kind
             {
@@ -1001,23 +1261,33 @@ impl Ui
         }
     }
 
-    fn try_for_each_element<T, F>(&self, mut f: F) -> ControlFlow<T>
+    fn try_for_each_element<T, Q, F>(&self, query: &Q, mut f: F) -> ControlFlow<T>
     where
+        Q: Fn(&UiPrimitive) -> bool,
         F: FnMut(&ElementPrimitiveId, &UiElementGlobal) -> ControlFlow<T>
     {
         self.ui.elements.iter().enumerate().try_for_each(|(index, element)|
         {
-            let id = ElementPrimitiveId::new(index);
+            let element = element.borrow();
 
-            element.borrow().try_for_each_element(id, &mut f)
+            if query(&element)
+            {
+                let id = ElementPrimitiveId::new(index);
+
+                element.try_for_each_element(query, id, &mut f)
+            } else
+            {
+                ControlFlow::Continue(())
+            }
         })
     }
 
-    fn for_each_element<F>(&self, mut f: F)
+    fn for_each_element<Q, F>(&self, query: &Q, mut f: F)
     where
+        Q: Fn(&UiPrimitive) -> bool,
         F: FnMut(&ElementPrimitiveId, &UiElementGlobal)
     {
-        self.try_for_each_element(|id, element|
+        self.try_for_each_element(query, |id, element|
         {
             f(id, element);
 

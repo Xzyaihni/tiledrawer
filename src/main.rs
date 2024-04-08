@@ -36,7 +36,7 @@ use ui::{
     UiElementPrimitive,
     UiElementComplex,
     UiElementType,
-    ScrollElementInfo,
+    ListElementInfo,
     KeepAspect
 };
 
@@ -607,12 +607,45 @@ impl DrawerWindow
 
         let draw_cursor = ui.push_child(&main_screen, element);
 
-        let element = UiElementComplex::Scroll(ScrollElementInfo{
-            pos: Point2{x: 0.4, y: 0.1},
-            size: Point2{x: 0.1, y: 0.8}.into(),
-            bar_size: 0.2,
-            background: Self::texture_filled(assets.clone(), Color{r: 235, g: 235, b: 235, a: 255}),
-            scrollbar: Self::texture_filled(assets.clone(), Color{r: 205, g: 205, b: 205, a: 255})
+        let t = |c|
+        {
+            Self::texture_filled(assets.clone(), c)
+        };
+
+        let mi = 30;
+        let c = |i|
+        {
+            let i = i as f32 / (mi - 1) as f32;
+
+            let to_u = |v|
+            {
+                (v * u8::MAX as f32) as u8
+            };
+
+            let shift = |v: f32, s: f32|
+            {
+                (v + s).fract()
+            };
+
+            let texture =
+                t(Color{r: to_u(i), g: to_u(shift(i, 0.7)), b: to_u(shift(i, 0.2)), a: 255});
+
+            UiElementPrimitive{
+                kind: UiElementType::Panel,
+                pos: Point2{x: 0.0, y: 0.0},
+                size: Point2{x: 1.0, y: 1.0}.into(),
+                texture: Some(texture)
+            }
+        };
+
+        let element = UiElementComplex::List(ListElementInfo{
+            items: (0..mi).map(c).collect::<Vec<UiElementPrimitive>>(),
+            pos: Point2{x: 0.2, y: 0.1},
+            size: Point2{x: 0.5, y: 0.8}.into(),
+            item_height: 0.2,
+            background: t(Color{r: 242, g: 242, b: 242, a: 255}),
+            scroll_background: t(Color{r: 235, g: 235, b: 235, a: 255}),
+            scrollbar: t(Color{r: 205, g: 205, b: 205, a: 255})
         });
 
         ui.push_child(&main_screen, element);
