@@ -390,16 +390,28 @@ impl ListElement
         }
     }
 
-    fn drawing_range(&self) -> Range<usize>
+    fn fits(&self) -> f32
     {
-        let fits = 1.0 / self.item_height;
+        1.0 / self.item_height
+    }
+
+    fn start_index(&self) -> f32
+    {
+        let fits = self.fits();
 
         let height = 1.0 - self.last_scroll;
 
         let last_item = self.items.len().saturating_sub(fits as usize);
-        let start_index = (height * last_item as f32) as usize;
+        height * last_item as f32
+    }
 
-        start_index..(start_index + fits.ceil() as usize)
+    fn drawing_range(&self) -> Range<usize>
+    {
+        let start_index = self.start_index() as usize;
+
+        let end_index = (start_index + self.fits() as usize + 1).min(self.items.len());
+
+        start_index..end_index
     }
 
     fn draw_custom(&self, ui: &Ui)
@@ -416,10 +428,12 @@ impl ListElement
     {
         self.last_scroll = scroll;
         self.draw_range = self.drawing_range();
+        
+        let offset = self.start_index().fract();
 
         self.items[self.draw_range.clone()].iter_mut().enumerate().for_each(|(index, item)|
         {
-            let y = index as f32 * self.item_height;
+            let y = (index as f32 - offset) * self.item_height;
 
             item.frame.set(UiAnimatableId::PositionY, 1.0 - y - self.item_height);
         });
