@@ -510,6 +510,7 @@ impl DrawerWindow
             controls: Controls::new()
         };
 
+        this.set_selected_color();
         this.update_cursor();
         this.update_1d_cursor();
         this.update_2d_cursor();
@@ -526,37 +527,6 @@ impl DrawerWindow
     {
         let main_texture = assets.borrow_mut().add_texture(image);
 
-        let pos = Point2{x: 0.3, y: 0.0};
-        let element = UiElementPrimitive{
-            kind: UiElementType::Panel,
-            pos,
-            size: Point2{x: 1.0 - pos.x, y: 1.0}.into(),
-            texture: Some(main_texture)
-        };
-
-        let main_screen = ui.push(element);
-
-        let color_image = Image::repeat(1, 1, Color{r: 0, g: 0, b: 0, a: 255});
-        let selector_2d_texture = assets.borrow_mut().add_texture(&color_image);
-        let selector_1d_texture = assets.borrow_mut().add_texture(&color_image);
-
-        let height = 0.4;
-        let padding = Point2{
-            x: 0.015,
-            y: 0.0
-        };
-
-        let half_pad = padding / 2.0;
-
-        let element = UiElementPrimitive{
-            kind: UiElementType::Panel,
-            pos: Point2{x: 0.0 + half_pad.x, y: 1.0 - height},
-            size: Point2{x: pos.x - padding.x, y: height}.into(),
-            texture: None
-        };
-
-        let color_selector = ui.push(element);
-
         let padding = Point2{
             x: 0.02,
             y: 0.02
@@ -564,37 +534,107 @@ impl DrawerWindow
 
         let half_pad = padding / 2.0;
 
-        let selected_part = 0.1;
+        let pos = Point2{x: 0.3, y: 0.0};
+        let main_screen = ui.push(UiElementPrimitive{
+            kind: UiElementType::Panel,
+            pos,
+            size: Point2{x: 1.0 - pos.x, y: 1.0}.into(),
+            texture: Some(main_texture)
+        });
+
+        let side_screen = ui.push(UiElementPrimitive{
+            kind: UiElementType::Panel,
+            pos: half_pad,
+            size: Point2{x: pos.x - padding.x, y: 1.0 - padding.y}.into(),
+            texture: None
+        });
+
+        let color_image = Image::repeat(1, 1, Color{r: 0, g: 0, b: 0, a: 255});
+        let selector_2d_texture = assets.borrow_mut().add_texture(&color_image);
+        let selector_1d_texture = assets.borrow_mut().add_texture(&color_image);
+
+        let height = 0.4;
+        let padding = Point2{
+            x: 0.05,
+            y: 0.05
+        };
+
+        let half_pad = padding / 2.0;
+
+        let color_selector = ui.push_child(&side_screen, UiElementPrimitive{
+            kind: UiElementType::Panel,
+            pos: Point2{x: 0.0, y: 1.0 - height},
+            size: Point2{x: 1.0, y: height}.into(),
+            texture: None
+        });
+
+        let selected_part = 0.13;
         let div = 0.9;
-        let element = UiElementPrimitive{
+
+        let selector_2d = ui.push_child(&color_selector, UiElementPrimitive{
             kind: UiElementType::Panel,
-            pos: Point2{x: 0.0, y: selected_part + half_pad.y},
-            size: Point2{x: div - half_pad.y, y: 1.0 - selected_part - half_pad.y}.into(),
+            pos: Point2{x: 0.0, y: selected_part},
+            size: Point2{x: div - half_pad.x, y: 1.0 - selected_part - half_pad.y}.into(),
             texture: Some(selector_2d_texture)
-        };
+        });
 
-        let selector_2d = ui.push_child(&color_selector, element);
-
-        let element = UiElementPrimitive{
+        let selector_1d = ui.push_child(&color_selector, UiElementPrimitive{
             kind: UiElementType::Panel,
-            pos: Point2{x: div + half_pad.x, y: selected_part + half_pad.y},
-            size: Point2{x: 1.0 - div - half_pad.y, y: 1.0 - selected_part - half_pad.y}.into(),
+            pos: Point2{x: div, y: selected_part},
+            size: Point2{x: 1.0 - div, y: 1.0 - selected_part - half_pad.y}.into(),
             texture: Some(selector_1d_texture)
-        };
-
-        let selector_1d = ui.push_child(&color_selector, element);
+        });
 
         let color_image = Image::repeat(1, 1, draw_color);
         let selected_color = assets.borrow_mut().add_texture(&color_image);
 
-        let element = UiElementPrimitive{
+        ui.push_child(&color_selector, UiElementPrimitive{
             kind: UiElementType::Panel,
-            pos: Point2{x: 0.0, y: 0.0},
-            size: Point2{x: 1.0, y: selected_part - half_pad.y}.into(),
+            pos: Point2{x: 0.0, y: half_pad.y},
+            size: Point2{x: 1.0, y: selected_part - padding.y}.into(),
             texture: Some(selected_color)
+        });
+
+        let t = |c|
+        {
+            Self::texture_filled(assets.clone(), c)
         };
 
-        ui.push_child(&color_selector, element);
+        let mi = 30;
+        let c = |i|
+        {
+            let i = i as f32 / (mi - 1) as f32;
+
+            let to_u = |v|
+            {
+                (v * u8::MAX as f32) as u8
+            };
+
+            let shift = |v: f32, s: f32|
+            {
+                (v + s).fract()
+            };
+
+            let texture =
+                t(Color{r: to_u(i), g: to_u(shift(i, 0.7)), b: to_u(shift(i, 0.2)), a: 255});
+
+            UiElementPrimitive{
+                kind: UiElementType::Panel,
+                pos: Point2{x: 0.0, y: 0.0},
+                size: Point2{x: 1.0, y: 1.0}.into(),
+                texture: Some(texture)
+            }
+        };
+
+        ui.push_child(&side_screen, UiElementComplex::List(ListElementInfo{
+            items: (0..mi).map(c).collect::<Vec<UiElementPrimitive>>(),
+            pos: Point2{x: 0.0, y: 0.0},
+            size: Point2{x: 1.0, y: 1.0 - height}.into(),
+            item_height: 0.2,
+            background: t(Color{r: 242, g: 242, b: 242, a: 255}),
+            scroll_background: t(Color{r: 235, g: 235, b: 235, a: 255}),
+            scrollbar: t(Color{r: 205, g: 205, b: 205, a: 255})
+        }));
 
         let size = Point2::repeat(8);
         let square_cursor_texture = Self::procedural_texture(assets.clone(), size, |pos, pixel|
@@ -642,57 +682,12 @@ impl DrawerWindow
 
         let selector_1d_cursor = ui.push_child(&selector_1d, element);
 
-        let element = UiElementPrimitive{
+        let draw_cursor = ui.push_child(&main_screen, UiElementPrimitive{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: 0.0},
             size: KeepAspect::from(Point2{x: 0.1, y: 0.1}).into(),
             texture: Some(square_cursor_texture)
-        };
-
-        let draw_cursor = ui.push_child(&main_screen, element);
-
-        let t = |c|
-        {
-            Self::texture_filled(assets.clone(), c)
-        };
-
-        let mi = 30;
-        let c = |i|
-        {
-            let i = i as f32 / (mi - 1) as f32;
-
-            let to_u = |v|
-            {
-                (v * u8::MAX as f32) as u8
-            };
-
-            let shift = |v: f32, s: f32|
-            {
-                (v + s).fract()
-            };
-
-            let texture =
-                t(Color{r: to_u(i), g: to_u(shift(i, 0.7)), b: to_u(shift(i, 0.2)), a: 255});
-
-            UiElementPrimitive{
-                kind: UiElementType::Panel,
-                pos: Point2{x: 0.0, y: 0.0},
-                size: Point2{x: 1.0, y: 1.0}.into(),
-                texture: Some(texture)
-            }
-        };
-
-        let element = UiElementComplex::List(ListElementInfo{
-            items: (0..mi).map(c).collect::<Vec<UiElementPrimitive>>(),
-            pos: Point2{x: 0.2, y: 0.1},
-            size: Point2{x: 0.5, y: 0.8}.into(),
-            item_height: 0.2,
-            background: t(Color{r: 242, g: 242, b: 242, a: 255}),
-            scroll_background: t(Color{r: 235, g: 235, b: 235, a: 255}),
-            scrollbar: t(Color{r: 205, g: 205, b: 205, a: 255})
         });
-
-        ui.push_child(&main_screen, element);
 
         UiGroup{
             main_texture,
