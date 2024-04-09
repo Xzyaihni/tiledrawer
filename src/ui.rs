@@ -1,7 +1,7 @@
 use std::{
     rc::{Weak, Rc},
     cell::{Ref, RefMut, RefCell},
-    ops::{Range, ControlFlow}
+    ops::{Range, ControlFlow, Index}
 };
 
 use sdl2::{render::{Texture, TextureAccess}, rect::Rect};
@@ -274,9 +274,22 @@ impl ScrollElement
     }
 }
 
+pub struct Children<'a>(&'a [Item]);
+
+impl<'a> Index<usize> for Children<'a>
+{
+    type Output = ElementId;
+
+    fn index(&self, index: usize) -> &Self::Output
+    {
+        &self.0[index].id
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Item
 {
+    id: ElementId,
     frame: Rc<RefCell<UiPrimitive>>,
     value: Rc<RefCell<UiPrimitive>>
 }
@@ -357,8 +370,9 @@ impl ListElement
             let id = adder.child(&container, element);
 
             Item{
+                value: adder.ui.get_primitive(&id).clone(),
                 frame: adder.ui.get_primitive(&container).clone(),
-                value: adder.ui.get_primitive(&id).clone()
+                id: ElementId::Primitive(id)
             }
         }).collect();
 
@@ -377,6 +391,11 @@ impl ListElement
         this.update_scroll(this.get_scroll());
 
         this
+    }
+
+    pub fn children(&self) -> Children
+    {
+        Children(&self.items)
     }
 
     fn get_scroll(&self) -> f32

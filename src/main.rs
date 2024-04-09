@@ -31,8 +31,11 @@ use image::{ImageError, RgbaImage, Rgba};
 
 use ui::{
     Ui,
+    UiEvent,
+    UiComplex,
     UiAnimatableId,
     ElementId,
+    ElementPrimitiveId,
     UiElementPrimitive,
     UiElementComplex,
     UiElementType,
@@ -233,7 +236,10 @@ struct UiGroup
     pub selector_1d_texture: TextureId,
     pub selector_1d: ElementId,
     pub selector_1d_cursor: ElementId,
-    pub draw_cursor: ElementId
+    pub draw_cursor: ElementId,
+    pub brush_button: ElementPrimitiveId,
+    pub pipette_button: ElementPrimitiveId,
+    pub fill_button: ElementPrimitiveId
 }
 
 const UNDO_LIMIT: usize = 20;
@@ -600,7 +606,7 @@ impl DrawerWindow
             Self::texture_filled(assets.clone(), c)
         };
 
-        let mi = 30;
+        let mi = 3;
         let c = |i|
         {
             let i = i as f32 / (mi - 1) as f32;
@@ -619,14 +625,14 @@ impl DrawerWindow
                 t(Color{r: to_u(i), g: to_u(shift(i, 0.7)), b: to_u(shift(i, 0.2)), a: 255});
 
             UiElementPrimitive{
-                kind: UiElementType::Panel,
+                kind: UiElementType::Button,
                 pos: Point2{x: 0.0, y: 0.0},
                 size: Point2{x: 1.0, y: 1.0}.into(),
                 texture: Some(texture)
             }
         };
 
-        ui.push_child(&side_screen, UiElementComplex::List(ListElementInfo{
+        let tools = ui.push_child(&side_screen, UiElementComplex::List(ListElementInfo{
             items: (0..mi).map(c).collect::<Vec<UiElementPrimitive>>(),
             pos: Point2{x: 0.0, y: 0.0},
             size: Point2{x: 1.0, y: 1.0 - height}.into(),
@@ -635,6 +641,33 @@ impl DrawerWindow
             scroll_background: t(Color{r: 235, g: 235, b: 235, a: 255}),
             scrollbar: t(Color{r: 205, g: 205, b: 205, a: 255})
         }));
+
+        let fill_button;
+        let pipette_button;
+        let brush_button;
+        {
+            let tools = ui.get_complex(&tools);
+            let tools = tools.borrow();
+
+            let tools = match &*tools
+            {
+                UiComplex::List(x) => x,
+                _ => unreachable!()
+            };
+
+            let children = tools.children();
+
+            let get = |i|
+            {
+                let id: &ElementPrimitiveId = (&children[i]).try_into().unwrap();
+
+                id.clone()
+            };
+
+            brush_button = get(0);
+            pipette_button = get(1);
+            fill_button = get(2);
+        }
 
         let size = Point2::repeat(8);
         let square_cursor_texture = Self::procedural_texture(assets.clone(), size, |pos, pixel|
@@ -699,7 +732,10 @@ impl DrawerWindow
             selector_1d_texture,
             selector_1d,
             selector_1d_cursor,
-            draw_cursor
+            draw_cursor,
+            brush_button,
+            fill_button,
+            pipette_button
         }
     }
 
@@ -1012,7 +1048,20 @@ impl DrawerWindow
     {
         if control == Control::Draw
         {
-            self.ui.mouse_state(state.is_down(), self.mouse_normalized());
+            let event = self.ui.mouse_state(state.is_down(), self.mouse_normalized());
+            if let Some(UiEvent{element_id: id}) = event
+            {
+                if id == self.ui_group.brush_button
+                {
+                    dbg!("brush click!");
+                } else if id == self.ui_group.pipette_button
+                {
+                    dbg!("pipette...");
+                } else if id == self.ui_group.fill_button
+                {
+                    dbg!("and fill!");
+                }
+            }
         }
 
         match state
