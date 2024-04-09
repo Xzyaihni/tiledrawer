@@ -119,7 +119,7 @@ impl Assets
 
     pub fn add_texture_access(&mut self, access: TextureAccess, image: &Image) -> TextureId
     {
-        let texture = unsafe{ self.texture_from_image(access, image) };
+        let texture = unsafe{ self.texture_from_image(access, image) }.unwrap();
 
         self.push_held(texture)
     }
@@ -143,7 +143,11 @@ impl Assets
         if image.size() != texture.size
         {
             let access = texture.access;
-            self.textures[id.0] = unsafe{ self.texture_from_image(access, image) };
+
+            if let Some(new_texture) = unsafe{ self.texture_from_image(access, image) }
+            {
+                self.textures[id.0] = new_texture;
+            }
 
             return self.texture_mut(id);
         }
@@ -157,7 +161,12 @@ impl Assets
         texture
     }
 
-    unsafe fn texture_from_image(&self, access: TextureAccess, image: &Image) -> HeldTexture
+    // cant do anything about the errors anyway, just Option it
+    unsafe fn texture_from_image(
+        &self,
+        access: TextureAccess,
+        image: &Image
+    ) -> Option<HeldTexture>
     {
         let size = image.size();
         let mut texture = self.creator.create_texture(
@@ -165,19 +174,19 @@ impl Assets
             access,
             size.x as u32,
             size.y as u32
-        ).unwrap();
+        ).ok()?;
 
         texture.set_blend_mode(BlendMode::Blend);
 
         let data = image.data_bytes();
 
-        texture.update(None, data, image.bytes_row()).unwrap();
+        texture.update(None, data, image.bytes_row()).ok()?;
 
-        HeldTexture{
+        Some(HeldTexture{
             size,
             access,
             texture: Self::make_texture_static(texture)
-        }
+        })
     }
 
     unsafe fn make_texture_static(texture: Texture<'_>) -> Texture<'static>
