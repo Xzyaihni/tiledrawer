@@ -37,6 +37,7 @@ use ui::{
     UiEvent,
     UiComplex,
     UiAnimatableId,
+    StretchMode,
     ElementId,
     ElementPrimitiveId,
     UiElementPrimitive,
@@ -513,7 +514,7 @@ impl DrawerWindow
     {
         let video = ctx.video().unwrap();
 
-        let font = ttf_ctx.load_font("font/OpenSans-Regular.ttf", 40).unwrap();
+        let font = ttf_ctx.load_font("font/OpenSans-Regular.ttf", 70).unwrap();
 
         let scale: f32 = 0.25;
 
@@ -659,10 +660,17 @@ impl DrawerWindow
                     name
                 );
 
+                let (x, y) = rect.size();
+                let size = Point2{x, y}.map(|x| x as f32);
+
+                let aspect = size.y / size.x;
+
+                let size = Point2{x: 1.0 / aspect, y: 1.0};
+
                 UiElementPrimitive{
                     kind: UiElementType::Button,
                     pos: Point2{x: 0.0, y: 0.0},
-                    size: Point2{x: 1.0, y: 1.0}.into(),
+                    size: KeepAspect::new(StretchMode::LockY, size).into(),
                     texture: Some(texture)
                 }
             }).collect();
@@ -686,7 +694,7 @@ impl DrawerWindow
                 _ => unreachable!()
             };
 
-            tools_list.children().iter().zip(names).map(|(child, name)|
+            tools_list.children().frames_iter().zip(names).map(|(child, name)|
             {
                 let id: &ElementPrimitiveId = (child).try_into().unwrap();
 
@@ -732,14 +740,14 @@ impl DrawerWindow
         let element = UiElementPrimitive{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: 0.0},
-            size: KeepAspect::from(Point2{x: 0.06, y: 0.06}).into(),
+            size: KeepAspect::new(StretchMode::Min, Point2{x: 0.06, y: 0.06}).into(),
             texture: Some(circle_cursor_texture)
         };
 
         let selector_2d_cursor = ui.push_child(&selector_2d, element.clone());
 
         let element = UiElementPrimitive{
-            size: KeepAspect::from(Point2{x: 0.9, y: 0.9}).into(),
+            size: KeepAspect::new(StretchMode::Min, Point2{x: 0.9, y: 0.9}).into(),
             ..element
         };
 
@@ -748,7 +756,7 @@ impl DrawerWindow
         let draw_cursor = ui.push_child(&main_screen, UiElementPrimitive{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: 0.0},
-            size: KeepAspect::from(Point2{x: 0.1, y: 0.1}).into(),
+            size: KeepAspect::new(StretchMode::Min, Point2{x: 0.1, y: 0.1}).into(),
             texture: Some(square_cursor_texture)
         });
 

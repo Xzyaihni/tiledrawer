@@ -288,9 +288,15 @@ impl<'a> Index<usize> for Children<'a>
 
 impl<'a> Children<'a>
 {
+    #[allow(dead_code)]
     pub fn iter(&self) -> impl Iterator<Item=&'a ElementId>
     {
         self.0.iter().map(|x| &x.id)
+    }
+
+    pub fn frames_iter(&self) -> impl Iterator<Item=&'a ElementId>
+    {
+        self.0.iter().map(|x| &x.frame_id)
     }
 }
 
@@ -298,6 +304,7 @@ impl<'a> Children<'a>
 struct Item
 {
     id: ElementId,
+    frame_id: ElementId,
     frame: Rc<RefCell<UiPrimitive>>,
     value: Rc<RefCell<UiPrimitive>>
 }
@@ -369,7 +376,7 @@ impl ListElement
         let items = info.items.into_iter().map(|element|
         {
             let container = adder.child(&background_id, UiElementPrimitive{
-                kind: UiElementType::Panel,
+                kind: UiElementType::Button,
                 pos: Point2{x: 0.0, y: 0.0},
                 size: Point2{x: 1.0, y: info.item_height}.into(),
                 texture: None
@@ -380,7 +387,8 @@ impl ListElement
             Item{
                 value: adder.ui.get_primitive(&id).clone(),
                 frame: adder.ui.get_primitive(&container).clone(),
-                id: ElementId::Primitive(id)
+                id: ElementId::Primitive(id),
+                frame_id: ElementId::Primitive(container)
             }
         }).collect();
 
@@ -467,12 +475,14 @@ impl ListElement
             {
                 let (clip_texture, texture) = assets.get_two_mut(clip_texture, texture_id);
 
-                let frame = &item.frame.borrow().element.inner;
+                let frame = &item.frame.borrow().element;
 
-                let pos = (frame.pos * size).map(|x| x as i32);
+                let pos = (frame.inner.pos * size).map(|x| x as i32);
 
-                let frame_size = frame.size.to_size(1.0);
-                let size = (frame_size * size).map(|x| x as u32 + 1);
+                let frame_size = frame.inner.size.to_size(1.0);
+                let value_size = value.inner.size.to_size(frame.global_size.aspect());
+
+                let size = (frame_size * value_size * size).map(|x| x as u32 + 1);
 
                 let rect = Rect::new(
                     pos.x,
@@ -618,18 +628,29 @@ pub enum UiElementType
     Button
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+pub enum StretchMode
+{
+    Min,
+    Max,
+    LockX,
+    LockY
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct KeepAspect
 {
     aspect: f32,
+    mode: StretchMode,
     size: Point2<f32>
 }
 
-impl From<Point2<f32>> for KeepAspect
+impl KeepAspect
 {
-    fn from(size: Point2<f32>) -> Self
+    pub fn new(mode: StretchMode, size: Point2<f32>) -> Self
     {
-        Self{aspect: 1.0, size}
+        Self{aspect: 1.0, mode, size}
     }
 }
 
@@ -663,16 +684,49 @@ impl UiSize
         match self
         {
             Self::Normal(x) => x,
-            Self::KeepAspect(KeepAspect{aspect, size: p}) =>
+            Self::KeepAspect(KeepAspect{aspect, mode, size: p}) =>
             {
                 let aspect = aspect * local_aspect;
 
-                if aspect > 1.0
+                match mode
                 {
-                    Point2{x: p.x / aspect, ..p}
-                } else
-                {
-                    Point2{y: p.y * aspect, ..p}
+                    StretchMode::Min | StretchMode::Max =>
+                    {
+                        let change_x = match mode
+                        {
+                            StretchMode::Min => aspect > 1.0,
+                            StretchMode::Max => aspect < 1.0,
+                            _ => unreachable!()
+                        };
+
+                        if change_x
+                        {
+                            Point2{x: p.x / aspect, ..p}
+                        } else
+                        {
+                            Point2{y: p.y * aspect, ..p}
+                        }
+                    },
+                    StretchMode::LockX =>
+                    {
+                        if aspect > 1.0
+                        {
+                            Point2{y: p.y * aspect, ..p}
+                        } else
+                        {
+                            Point2{y: p.y * aspect, ..p}
+                        }
+                    },
+                    StretchMode::LockY =>
+                    {
+                        if aspect > 1.0
+                        {
+                            Point2{x: p.x / aspect, ..p}
+                        } else
+                        {
+                            Point2{x: p.x / aspect, ..p}
+                        }
+                    }
                 }
             }
         }
