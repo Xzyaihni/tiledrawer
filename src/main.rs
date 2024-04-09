@@ -50,10 +50,14 @@ use ui::{
 use animator::Animatable;
 pub use point::Point2;
 
+pub use color::Color;
+use color::Hsv;
+
 use config::Config;
 
 mod point;
 mod animator;
+mod color;
 mod config;
 mod ui;
 
@@ -63,24 +67,6 @@ pub fn complain(message: impl Display) -> !
     println!("{message}");
 
     process::exit(1)
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct Color
-{
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: u8
-}
-
-impl From<Color> for SdlColor
-{
-    fn from(x: Color) -> Self
-    {
-        SdlColor::RGBA(x.r, x.g, x.b, x.a)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,9 +245,19 @@ impl WindowWrapper
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolId
+{
+    Pipette,
+    Brush,
+    Fill
+}
+
+#[allow(dead_code)]
 struct Tool
 {
     name: &'static str,
+    tool_id: ToolId,
     id: ElementPrimitiveId
 }
 
@@ -458,33 +454,6 @@ impl Controls
     }
 }
 
-struct Hsv
-{
-    pub h: f32,
-    pub s: f32,
-    pub v: f32
-}
-
-impl From<Hsv> for Color
-{
-    fn from(hsv: Hsv) -> Self
-    {
-        let t = |v: f32|
-        {
-            (v * 255.0) as u8
-        };
-
-        let f = |n: f32| -> u8
-        {
-            let k = (n + hsv.h / 60.0) % 6.0;
-
-            t(hsv.v - hsv.v * hsv.s * (k.min(4.0 - k)).clamp(0.0, 1.0))
-        };
-
-        Color{r: f(5.0), g: f(3.0), b: f(1.0), a: 255}
-    }
-}
-
 struct DrawerWindow
 {
     window: Rc<RefCell<WindowWrapper>>,
@@ -497,6 +466,7 @@ struct DrawerWindow
     color_position: Point2<f32>,
     billinear: bool,
     mouse_position: Point2<i32>,
+    active_tool: ToolId,
     draw_color: Color,
     erase_color: Color,
     previous_draw: Option<Point2<i32>>,
@@ -551,6 +521,7 @@ impl DrawerWindow
             color_position: Point2{x: 0.0, y: 0.0},
             billinear,
             mouse_position: Point2{x: 0, y: 0},
+            active_tool: ToolId::Brush,
             draw_color,
             erase_color: Color{r: 0, g: 0, b: 0, a: 0},
             previous_draw: None,
@@ -649,9 +620,13 @@ impl DrawerWindow
         };
 
         let tools = {
-            let names = ["brush", "pipette", "fill"];
+            let names = [
+                (ToolId::Brush, "brush"),
+                (ToolId::Pipette, "pipette"),
+                (ToolId::Fill, "fill")
+            ];
 
-            let items = names.iter().map(|name|
+            let items = names.iter().map(|(_tool_id, name)|
             {
                 let (rect, texture) = Self::create_text_texture(
                     assets.clone(),
@@ -694,7 +669,7 @@ impl DrawerWindow
                 _ => unreachable!()
             };
 
-            tools_list.children().frames_iter().zip(names).map(|(child, name)|
+            tools_list.children().frames_iter().zip(names).map(|(child, (tool_id, name))|
             {
                 let id: &ElementPrimitiveId = (child).try_into().unwrap();
 
@@ -702,6 +677,7 @@ impl DrawerWindow
 
                 Tool{
                     name,
+                    tool_id,
                     id
                 }
             }).collect()
@@ -952,6 +928,41 @@ impl DrawerWindow
         &self.image
     }
 
+    fn handle_brush(&mut self, position: Point2<i32>)
+    {
+        let draw_with = |this: &mut Self, color|
+        {
+            if let Some(previous) = this.previous_draw
+            {
+                this.image.line_overflowing(previous, position, color);
+            } else
+            {
+                let pos = this.image.overflowing_pos(position);
+                this.image[pos] = color;
+            }
+
+            this.previous_draw = Some(position);
+        };
+
+        if self.controls.is_down(Control::Draw)
+        {
+            draw_with(self, self.draw_color);
+        } else if self.controls.is_down(Control::Erase)
+        {
+            draw_with(self, self.erase_color);
+        }
+    }
+
+    fn handle_pipette(&mut self, position: Point2<i32>)
+    {
+        if self.controls.is_down(Control::Draw)
+        {
+            let pos = self.image.overflowing_pos(position);
+
+            self.set_sliders_to(self.image[pos]);
+        }
+    }
+
     pub fn update(&mut self, dt: f32)
     {
         self.update_cursor();
@@ -965,27 +976,8 @@ impl DrawerWindow
             self.scale *= 1.0 + speed * dt;
         }
 
-        let draw_with = |this: &mut Self, color|
-        {
-            if let Some(position) = this.mouse_image()
-            {
-                if let Some(previous) = this.previous_draw
-                {
-                    this.image.line_overflowing(previous, position, color);
-                } else
-                {
-                    let pos = this.image.overflowing_pos(position);
-                    this.image[pos] = color;
-                }
-
-                this.previous_draw = Some(position);
-            }
-        };
-
         if self.controls.is_down(Control::Draw)
         {
-            draw_with(self, self.draw_color);
-
             if let Some(position) = self.mouse_inside(&self.ui_group.selector_1d)
             {
                 self.color_slider = position.y;
@@ -997,10 +989,29 @@ impl DrawerWindow
                 self.set_selected_color();
                 self.update_2d_cursor();
             }
-        } else if self.controls.is_down(Control::Erase)
-        {
-            draw_with(self, self.erase_color);
         }
+
+        if let Some(position) = self.mouse_image()
+        {
+            match self.active_tool
+            {
+                ToolId::Brush => self.handle_brush(position),
+                ToolId::Pipette => self.handle_pipette(position),
+                ToolId::Fill => todo!()
+            }
+        }
+    }
+
+    fn set_sliders_to(&mut self, color: Color)
+    {
+        let hsv = Hsv::from(color);
+        self.color_slider = hsv.h / 360.0;
+        self.color_position = Point2{x: hsv.s, y: 1.0 - hsv.v};
+
+        self.draw_color = color;
+
+        self.update_1d_cursor();
+        self.update_2d_cursor();
     }
 
     fn set_selected_color(&mut self)
@@ -1109,7 +1120,7 @@ impl DrawerWindow
 
                 if let Some(tool) = tool
                 {
-                    dbg!(tool.name);
+                    self.active_tool = tool.tool_id;
                 }
             }
         }
