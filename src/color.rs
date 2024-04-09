@@ -11,6 +11,23 @@ pub struct Color
     pub a: u8
 }
 
+impl PartialEq for Color
+{
+    fn eq(&self, other: &Self) -> bool
+    {
+        if self.a == 0 && other.a == 0
+        {
+            true
+        } else
+        {
+            self.r == other.r
+                && self.g == other.g
+                && self.b == other.b
+                && self.a == other.a
+        }
+    }
+}
+
 impl From<Color> for SdlColor
 {
     fn from(x: Color) -> Self

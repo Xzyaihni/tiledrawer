@@ -12,7 +12,7 @@ use std::{
     fmt::Display,
     path::Path,
     time::Duration,
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     ops::{Index, IndexMut, Deref, DerefMut}
 };
 
@@ -944,12 +944,20 @@ impl DrawerWindow
             this.previous_draw = Some(position);
         };
 
-        if self.controls.is_down(Control::Draw)
+        let color = if self.controls.is_down(Control::Draw)
         {
-            draw_with(self, self.draw_color);
+            Some(self.draw_color)
         } else if self.controls.is_down(Control::Erase)
         {
-            draw_with(self, self.erase_color);
+            Some(self.erase_color)
+        } else
+        {
+            None
+        };
+
+        if let Some(color) = color
+        {
+            draw_with(self, color);
         }
     }
 
@@ -960,6 +968,27 @@ impl DrawerWindow
             let pos = self.image.overflowing_pos(position);
 
             self.set_sliders_to(self.image[pos]);
+        }
+    }
+
+    fn handle_fill(&mut self, position: Point2<i32>)
+    {
+        let color = if self.controls.is_down(Control::Draw)
+        {
+            Some(self.draw_color)
+        } else if self.controls.is_down(Control::Erase)
+        {
+            Some(self.erase_color)
+        } else
+        {
+            None
+        };
+
+        if let Some(color) = color
+        {
+            let pos = self.image.overflowing_pos(position);
+
+            self.image.flood_fill(pos, color);
         }
     }
 
@@ -997,7 +1026,7 @@ impl DrawerWindow
             {
                 ToolId::Brush => self.handle_brush(position),
                 ToolId::Pipette => self.handle_pipette(position),
-                ToolId::Fill => todo!()
+                ToolId::Fill => self.handle_fill(position)
             }
         }
     }
@@ -1289,6 +1318,53 @@ impl Image
         }).save(path)
     }
 
+    pub fn flood_fill(&mut self, pos: Point2<usize>, color: Color)
+    {
+        let mut visited = HashSet::new();
+
+        let start_color = self[pos];
+
+        self.fill_inner(
+            &mut visited,
+            pos.map(|x| x as i32),
+            &|compare| compare == start_color,
+            &mut |pixel| *pixel = color
+        );
+    }
+
+    fn fill_inner<AF, SF>(
+        &mut self,
+        visited: &mut HashSet<Point2<i32>>,
+        pos: Point2<i32>,
+        accept: &AF,
+        set: &mut SF
+    )
+    where
+        AF: Fn(Color) -> bool,
+        SF: FnMut(&mut Color)
+    {
+        let this = self.get_overflowing_mut(pos);
+
+        if !accept(*this)
+        {
+            return;
+        }
+
+        let proceed = visited.insert(pos);
+
+        if !proceed
+        {
+            return;
+        }
+
+        set(this);
+
+        self.fill_inner(visited, Point2{x: pos.x + 1, ..pos}, accept, set);
+        self.fill_inner(visited, Point2{x: pos.x - 1, ..pos}, accept, set);
+        self.fill_inner(visited, Point2{y: pos.y + 1, ..pos}, accept, set);
+        self.fill_inner(visited, Point2{y: pos.y - 1, ..pos}, accept, set);
+    }
+
     pub fn line_overflowing(&mut self, mut start: Point2<i32>, end: Point2<i32>, c: Color)
     {
         let change = (end - start).map(|x| x.abs());
@@ -1417,6 +1493,12 @@ impl Image
             x: self.width,
             y: self.height
         }
+    }
+
+    #[allow(dead_code)]
+    fn inbounds(&self, pos: Point2<usize>) -> bool
+    {
+        pos.x < self.width && pos.y < self.height
     }
 
     fn saturating_pos(&self, pos: Point2<i32>) -> Point2<usize>
