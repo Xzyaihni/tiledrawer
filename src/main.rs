@@ -21,6 +21,9 @@ use sdl2::{
     EventPump,
     mouse::MouseButton,
     keyboard::Keycode,
+    rect::Rect,
+    surface::Surface,
+    ttf::{Sdl2TtfContext, Font},
     render::{Canvas, Texture, TextureCreator, TextureAccess, BlendMode},
     pixels::{PixelFormatEnum, Color as SdlColor},
     event::{WindowEvent, Event},
@@ -71,6 +74,14 @@ pub struct Color
     pub a: u8
 }
 
+impl From<Color> for SdlColor
+{
+    fn from(x: Color) -> Self
+    {
+        SdlColor::RGBA(x.r, x.g, x.b, x.a)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextureId(usize);
 
@@ -98,6 +109,22 @@ impl Assets
         }
     }
 
+    pub fn add_texture_from_surface(&mut self, surface: Surface) -> TextureId
+    {
+        let size = surface.size();
+
+        let texture = surface.as_texture(&self.creator).unwrap();
+        let texture = unsafe{ Self::make_texture_static(texture) };
+
+        let held = HeldTexture{
+            access: TextureAccess::Static,
+            size: Point2{x: size.0 as usize, y: size.1 as usize},
+            texture
+        };
+
+        self.push_held(held)
+    }
+
     pub fn add_texture(&mut self, image: &Image) -> TextureId
     {
         self.add_texture_access(TextureAccess::Static, image)
@@ -105,9 +132,15 @@ impl Assets
 
     pub fn add_texture_access(&mut self, access: TextureAccess, image: &Image) -> TextureId
     {
+        let texture = unsafe{ self.texture_from_image(access, image) };
+
+        self.push_held(texture)
+    }
+
+    fn push_held(&mut self, texture: HeldTexture) -> TextureId
+    {
         let id = self.textures.len();
 
-        let texture = unsafe{ self.texture_from_image(access, image) };
         self.textures.push(texture);
 
         TextureId(id)
@@ -225,6 +258,12 @@ impl WindowWrapper
     }
 }
 
+struct Tool
+{
+    name: &'static str,
+    id: ElementPrimitiveId
+}
+
 struct UiGroup
 {
     pub main_texture: TextureId,
@@ -237,9 +276,7 @@ struct UiGroup
     pub selector_1d: ElementId,
     pub selector_1d_cursor: ElementId,
     pub draw_cursor: ElementId,
-    pub brush_button: ElementPrimitiveId,
-    pub pipette_button: ElementPrimitiveId,
-    pub fill_button: ElementPrimitiveId
+    pub tools: Vec<Tool>
 }
 
 const UNDO_LIMIT: usize = 20;
@@ -469,11 +506,14 @@ impl DrawerWindow
 {
     pub fn new(
         ctx: Sdl,
+        ttf_ctx: &Sdl2TtfContext,
         image: Image,
         billinear: bool
     ) -> Self
     {
         let video = ctx.video().unwrap();
+
+        let font = ttf_ctx.load_font("font/OpenSans-Regular.ttf", 40).unwrap();
 
         let scale: f32 = 0.25;
 
@@ -497,7 +537,7 @@ impl DrawerWindow
         let draw_color = Color{r: 0, g: 0, b: 0, a: 255};
         let mut ui = Ui::new(window.clone(), assets.clone());
 
-        let ui_group = Self::new_ui(&mut ui, assets.clone(), draw_color, &image);
+        let ui_group = Self::new_ui(&mut ui, &font, assets.clone(), draw_color, &image);
 
         let mut this = Self{
             window,
@@ -526,6 +566,7 @@ impl DrawerWindow
 
     fn new_ui(
         ui: &mut Ui,
+        font: &Font<'_, 'static>,
         assets: Rc<RefCell<Assets>>,
         draw_color: Color,
         image: &Image
@@ -606,68 +647,57 @@ impl DrawerWindow
             Self::texture_filled(assets.clone(), c)
         };
 
-        let mi = 3;
-        let c = |i|
-        {
-            let i = i as f32 / (mi - 1) as f32;
+        let tools = {
+            let names = ["brush", "pipette", "fill"];
 
-            let to_u = |v|
+            let items = names.iter().map(|name|
             {
-                (v * u8::MAX as f32) as u8
-            };
+                let (rect, texture) = Self::create_text_texture(
+                    assets.clone(),
+                    font,
+                    Color{r: 0, g: 0, b: 0, a: 255},
+                    name
+                );
 
-            let shift = |v: f32, s: f32|
-            {
-                (v + s).fract()
-            };
+                UiElementPrimitive{
+                    kind: UiElementType::Button,
+                    pos: Point2{x: 0.0, y: 0.0},
+                    size: Point2{x: 1.0, y: 1.0}.into(),
+                    texture: Some(texture)
+                }
+            }).collect();
 
-            let texture =
-                t(Color{r: to_u(i), g: to_u(shift(i, 0.7)), b: to_u(shift(i, 0.2)), a: 255});
-
-            UiElementPrimitive{
-                kind: UiElementType::Button,
+            let tools_list = ui.push_child(&side_screen, UiElementComplex::List(ListElementInfo{
+                items,
                 pos: Point2{x: 0.0, y: 0.0},
-                size: Point2{x: 1.0, y: 1.0}.into(),
-                texture: Some(texture)
-            }
-        };
+                size: Point2{x: 1.0, y: 1.0 - height}.into(),
+                item_height: 0.2,
+                background: t(Color{r: 242, g: 242, b: 242, a: 255}),
+                scroll_background: t(Color{r: 235, g: 235, b: 235, a: 255}),
+                scrollbar: t(Color{r: 205, g: 205, b: 205, a: 255})
+            }));
 
-        let tools = ui.push_child(&side_screen, UiElementComplex::List(ListElementInfo{
-            items: (0..mi).map(c).collect::<Vec<UiElementPrimitive>>(),
-            pos: Point2{x: 0.0, y: 0.0},
-            size: Point2{x: 1.0, y: 1.0 - height}.into(),
-            item_height: 0.2,
-            background: t(Color{r: 242, g: 242, b: 242, a: 255}),
-            scroll_background: t(Color{r: 235, g: 235, b: 235, a: 255}),
-            scrollbar: t(Color{r: 205, g: 205, b: 205, a: 255})
-        }));
+            let tools_list = ui.get_complex(&tools_list);
+            let tools_list = tools_list.borrow();
 
-        let fill_button;
-        let pipette_button;
-        let brush_button;
-        {
-            let tools = ui.get_complex(&tools);
-            let tools = tools.borrow();
-
-            let tools = match &*tools
+            let tools_list = match &*tools_list
             {
                 UiComplex::List(x) => x,
                 _ => unreachable!()
             };
 
-            let children = tools.children();
-
-            let get = |i|
+            tools_list.children().iter().zip(names).map(|(child, name)|
             {
-                let id: &ElementPrimitiveId = (&children[i]).try_into().unwrap();
+                let id: &ElementPrimitiveId = (child).try_into().unwrap();
 
-                id.clone()
-            };
+                let id = id.clone();
 
-            brush_button = get(0);
-            pipette_button = get(1);
-            fill_button = get(2);
-        }
+                Tool{
+                    name,
+                    id
+                }
+            }).collect()
+        };
 
         let size = Point2::repeat(8);
         let square_cursor_texture = Self::procedural_texture(assets.clone(), size, |pos, pixel|
@@ -733,10 +763,23 @@ impl DrawerWindow
             selector_1d,
             selector_1d_cursor,
             draw_cursor,
-            brush_button,
-            fill_button,
-            pipette_button
+            tools
         }
+    }
+
+    fn create_text_texture(
+        assets: Rc<RefCell<Assets>>,
+        font: &Font<'_, 'static>,
+        color: Color,
+        text: &str
+    ) -> (Rect, TextureId)
+    {
+        let color: SdlColor = color.into();
+        let surface = font.render(text).blended(color).unwrap();
+
+        let rect = surface.rect();
+
+        (rect, assets.borrow_mut().add_texture_from_surface(surface))
     }
 
     fn texture_filled(assets: Rc<RefCell<Assets>>, color: Color) -> TextureId
@@ -1051,15 +1094,14 @@ impl DrawerWindow
             let event = self.ui.mouse_state(state.is_down(), self.mouse_normalized());
             if let Some(UiEvent{element_id: id}) = event
             {
-                if id == self.ui_group.brush_button
+                let tool = self.ui_group.tools.iter().find(|tool|
                 {
-                    dbg!("brush click!");
-                } else if id == self.ui_group.pipette_button
+                    tool.id == id
+                });
+
+                if let Some(tool) = tool
                 {
-                    dbg!("pipette...");
-                } else if id == self.ui_group.fill_button
-                {
-                    dbg!("and fill!");
+                    dbg!(tool.name);
                 }
             }
         }
@@ -1502,7 +1544,9 @@ fn main()
     // i hate the sdl rust api i hate the sdl rust api i hate the sdl rust api
     let mut events = ctx.event_pump().unwrap();
 
-    let mut window = DrawerWindow::new(ctx, image, config.billinear);
+    let ttf_ctx = sdl2::ttf::init().unwrap();
+
+    let mut window = DrawerWindow::new(ctx, &ttf_ctx, image, config.billinear);
 
     window.wait_exit(&mut events);
 

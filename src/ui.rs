@@ -286,6 +286,14 @@ impl<'a> Index<usize> for Children<'a>
     }
 }
 
+impl<'a> Children<'a>
+{
+    pub fn iter(&self) -> impl Iterator<Item=&'a ElementId>
+    {
+        self.0.iter().map(|x| &x.id)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Item
 {
