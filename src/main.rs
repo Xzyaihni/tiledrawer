@@ -21,7 +21,7 @@ use sdl2::{
     EventPump,
     mouse::MouseButton,
     keyboard::Keycode,
-    render::{Canvas, Texture, TextureCreator, BlendMode},
+    render::{Canvas, Texture, TextureCreator, TextureAccess, BlendMode},
     pixels::{PixelFormatEnum, Color as SdlColor},
     event::{WindowEvent, Event},
     video::{Window, WindowContext}
@@ -74,6 +74,7 @@ pub struct TextureId(usize);
 struct HeldTexture
 {
     size: Point2<usize>,
+    access: TextureAccess,
     texture: Texture<'static>
 }
 
@@ -96,34 +97,49 @@ impl Assets
 
     pub fn add_texture(&mut self, image: &Image) -> TextureId
     {
+        self.add_texture_access(TextureAccess::Static, image)
+    }
+
+    pub fn add_texture_access(&mut self, access: TextureAccess, image: &Image) -> TextureId
+    {
         let id = self.textures.len();
 
-        let texture = unsafe{ self.texture_from_image(image) };
+        let texture = unsafe{ self.texture_from_image(access, image) };
         self.textures.push(texture);
 
         TextureId(id)
     }
 
-    pub fn update_texture(&mut self, id: TextureId, image: &Image)
+    pub fn update_texture<'a, 'b>(
+        &'a mut self,
+        id: TextureId,
+        image: &'b Image
+    ) -> &'a mut Texture<'static>
     {
-        if image.size() != self.textures[id.0].size
+        let texture = &self.textures[id.0];
+        if image.size() != texture.size
         {
-            self.textures[id.0] = unsafe{ self.texture_from_image(image) };
+            let access = texture.access;
+            self.textures[id.0] = unsafe{ self.texture_from_image(access, image) };
 
-            return;
+            return self.texture_mut(id);
         }
 
         let data = image.data_bytes();
         let row = image.bytes_row();
 
-        self.texture_mut(id).update(None, data, row).unwrap();
+        let texture = self.texture_mut(id);
+        texture.update(None, data, row).unwrap();
+
+        texture
     }
 
-    unsafe fn texture_from_image(&self, image: &Image) -> HeldTexture
+    unsafe fn texture_from_image(&self, access: TextureAccess, image: &Image) -> HeldTexture
     {
         let size = image.size();
-        let mut texture = self.creator.create_texture_static(
+        let mut texture = self.creator.create_texture(
             PixelFormatEnum::RGBA32,
+            access,
             size.x as u32,
             size.y as u32
         ).unwrap();
@@ -136,6 +152,7 @@ impl Assets
 
         HeldTexture{
             size,
+            access,
             texture: Self::make_texture_static(texture)
         }
     }
@@ -145,12 +162,39 @@ impl Assets
         mem::transmute(texture)
     }
 
+    pub fn get_two_mut<'a>(
+        &'a mut self,
+        one: TextureId,
+        two: TextureId
+    ) -> (&'a mut Texture<'static>, &'a mut Texture<'static>)
+    {
+        let one = one.0;
+        let two = two.0; 
+
+        if one == two
+        {
+            panic!("get_two both indices cant be the same");
+        }
+
+        if one > two
+        {
+            let (left, right) = self.textures.split_at_mut(one);
+
+            (&mut right[0].texture, &mut left[two].texture)
+        } else
+        {
+            let (left, right) = self.textures.split_at_mut(two);
+
+            (&mut left[one].texture, &mut right[0].texture)
+        }
+    }
+
     pub fn texture(&self, id: TextureId) -> &Texture<'static>
     {
         &self.textures[id.0].texture
     }
 
-    pub fn texture_mut(&mut self, id: TextureId) -> &mut Texture<'static>
+    pub fn texture_mut<'a>(&'a mut self, id: TextureId) -> &'a mut Texture<'static>
     {
         &mut self.textures[id.0].texture
     }

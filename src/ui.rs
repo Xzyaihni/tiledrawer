@@ -1,12 +1,12 @@
 use std::{
     rc::{Weak, Rc},
-    cell::{Ref, RefCell},
+    cell::{Ref, RefMut, RefCell},
     ops::{Range, ControlFlow}
 };
 
-use sdl2::rect::Rect;
+use sdl2::{render::{Texture, TextureAccess}, rect::Rect};
 
-use crate::{Point2, WindowWrapper, Assets, TextureId, animator::Animatable};
+use crate::{Image, Color, Point2, WindowWrapper, Assets, TextureId, animator::Animatable};
 
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -343,7 +343,7 @@ impl ListElement
             pos: Point2{x: 0.0, y: 0.0},
             size: Point2{x: 1.0 - scrollbar_width, y: 1.0}.into(),
             texture: Some(info.background)
-        }.default_flags().clipped().no_draw());
+        }.default_flags().no_draw());
 
         let items = info.items.into_iter().map(|element|
         {
@@ -420,12 +420,45 @@ impl ListElement
 
     fn draw_custom(&self, ui: &Ui)
     {
-        ui.draw_element(&self.background.borrow().element);
+        let background = &self.background.borrow().element;
+        ui.draw_element(background);
+
+        let parent_size = ui.pixels_size_inner(&background).map(|x| x as usize);
+
+        let mut assets = ui.ui.assets.borrow_mut();
+        let clip_texture = ui.ui.temporary_texture;
+
+        let image = Image::repeat(parent_size.x, parent_size.y, Color{r: 0, g: 0, b: 0, a: 0});
+        assets.update_texture(clip_texture, &image);
+
+        let size = parent_size.map(|x| x as f32);
 
         self.items[self.draw_range.clone()].iter().for_each(|item|
         {
-            ui.draw_element(&item.value.borrow().element);
+            let value = &item.value.borrow().element;
+            if let Some(texture_id) = value.inner.texture
+            {
+                let (clip_texture, texture) = assets.get_two_mut(clip_texture, texture_id);
+
+                let frame = &item.frame.borrow().element.inner;
+
+                let pos = (frame.pos * size).map(|x| x as i32);
+
+                let frame_size = frame.size.to_size(1.0);
+                let size = (frame_size * size).map(|x| x as u32 + 1);
+
+                let rect = Rect::new(
+                    pos.x,
+                    parent_size.y as i32 - pos.y - size.y as i32,
+                    size.x,
+                    size.y
+                );
+
+                ui.draw_texture_to_texture(clip_texture, texture, rect);
+            }
         });
+
+        ui.draw_texture(assets.texture(clip_texture), background);
     }
 
     fn update_scroll(&mut self, scroll: f32)
@@ -660,7 +693,6 @@ impl UiSize
 #[derive(Debug, Clone)]
 struct PrimitiveFlags
 {
-    clipped: bool,
     no_draw: bool
 }
 
@@ -668,7 +700,7 @@ impl Default for PrimitiveFlags
 {
     fn default() -> Self
     {
-        Self{clipped: false, no_draw: false}
+        Self{no_draw: false}
     }
 }
 
@@ -689,13 +721,6 @@ impl From<UiElementPrimitive> for UiElementPrimitiveWithFlags
 
 impl UiElementPrimitiveWithFlags
 {
-    pub fn clipped(mut self) -> Self
-    {
-        self.flags.clipped = true;
-
-        self
-    }
-
     pub fn no_draw(mut self) -> Self
     {
         self.flags.no_draw = true;
@@ -1151,7 +1176,8 @@ struct UiGeneral
 {
     window: Rc<RefCell<WindowWrapper>>,
     assets: Rc<RefCell<Assets>>,
-    elements: Vec<Rc<RefCell<UiPrimitive>>>
+    elements: Vec<Rc<RefCell<UiPrimitive>>>,
+    temporary_texture: TextureId
 }
 
 pub struct Ui
@@ -1166,10 +1192,17 @@ impl Ui
 {
     pub fn new(window: Rc<RefCell<WindowWrapper>>, assets: Rc<RefCell<Assets>>) -> Self
     {
+        let empty_image = Image::repeat(1, 1, Color{r: 0, g: 0, b: 0, a: 0});
+        let temporary_texture = assets.borrow_mut().add_texture_access(
+            TextureAccess::Target,
+            &empty_image
+        );
+
         let ui = UiGeneral{
             window,
             assets,
-            elements: Vec::new()
+            elements: Vec::new(),
+            temporary_texture
         };
 
         Self{complex: Vec::new(), ui}
@@ -1276,33 +1309,90 @@ impl Ui
         }
     }
 
+    fn temporary_texture(&self, size: Point2<usize>) -> RefMut<Texture<'static>>
+    {
+        let image = Image::repeat(size.x, size.y, Color{r: 0, g: 0, b: 0, a: 0});
+
+        RefMut::map(self.ui.assets.borrow_mut(), |assets|
+        {
+            assets.update_texture(self.ui.temporary_texture, &image)
+        })
+    }
+
     fn draw_element(&self, element: &UiElementGlobal)
+    {
+        if let Some(texture_id) = element.inner.texture
+        {
+            let assets = self.ui.assets.borrow();
+
+            self.draw_texture(assets.texture(texture_id), element);
+        }
+    }
+
+    fn draw_texture(&self, texture: &Texture, element: &UiElementGlobal)
+    {
+        let rect = self.element_rect(element);
+        
+        self.ui.window.borrow_mut().canvas
+            .copy(texture, None, rect)
+            .unwrap();
+    }
+
+    fn draw_to_texture(&self, texture: &mut Texture, element: &UiElementGlobal)
+    {
+        if let Some(texture_id) = element.inner.texture
+        {
+            let assets = self.ui.assets.borrow();
+
+            let rect = self.element_rect(element);
+            self.draw_texture_to_texture(texture, assets.texture(texture_id), rect)
+        }
+    }
+
+    fn draw_texture_to_texture(
+        &self,
+        target_texture: &mut Texture,
+        draw_texture: &Texture,
+        rect: Rect
+    )
+    {
+        self.ui.window.borrow_mut().canvas
+            .with_texture_canvas(target_texture, |canvas|
+            {
+                canvas.copy(draw_texture, None, rect).unwrap()
+            })
+            .unwrap();
+    }
+
+    fn draw_with(&self, f: impl FnOnce(&Texture, Rect), element: &UiElementGlobal)
+    {
+        if let Some(texture_id) = element.inner.texture
+        {
+            let assets = self.ui.assets.borrow();
+
+            let rect = self.element_rect(element);
+            f(assets.texture(texture_id), rect)
+        }
+    }
+
+    fn element_rect(&self, element: &UiElementGlobal) -> Rect
     {
         let window_size = self.window_size().map(|x| x as f32);
 
-        let assets = self.ui.assets.borrow();
+        let scaled_pos = {
+            let mut pos = element.global_pos;
 
-        if let Some(texture_id) = element.inner.texture
-        {
-            let texture = assets.texture(texture_id);
+            pos.y = 1.0 - pos.y - element.global_size.y;
 
-            let scaled_pos = {
-                let mut pos = element.global_pos;
+            pos * window_size
+        }.map(|x| x.round() as i32);
 
-                pos.y = 1.0 - pos.y - element.global_size.y;
+        let x = scaled_pos.x;
+        let y = scaled_pos.y;
 
-                pos * window_size
-            }.map(|x| x.round() as i32);
+        let Point2{x: width, y: height} = self.pixels_size_inner(element);
 
-            let x = scaled_pos.x;
-            let y = scaled_pos.y;
-
-            let Point2{x: width, y: height} = self.pixels_size_inner(element);
-
-            self.ui.window.borrow_mut().canvas
-                .copy(texture, None, Rect::new(x, y, width, height))
-                .unwrap();
-        }
+        Rect::new(x, y, width, height)
     }
 
     pub fn draw(&self)
