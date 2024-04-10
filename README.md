@@ -17,3 +17,5 @@ z - undo
 left mouse - draw
 
 right mouse (or v) - erase
+
+lctrl - color picker

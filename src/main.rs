@@ -366,6 +366,7 @@ enum Control
     ZoomOut,
     ZoomIn,
     Undo,
+    ColorPick,
     Last
 }
 
@@ -444,6 +445,7 @@ impl Controls
             ControlRaw::Keyboard(Keycode::Equals) => Some(Control::ZoomIn),
             ControlRaw::Keyboard(Keycode::Minus) => Some(Control::ZoomOut),
             ControlRaw::Keyboard(Keycode::Z) => Some(Control::Undo),
+            ControlRaw::Keyboard(Keycode::LCtrl) => Some(Control::ColorPick),
             ControlRaw::Mouse(MouseButton::Left) => Some(Control::Draw),
             // my right mouse button is broken lmao
             ControlRaw::Mouse(MouseButton::Right)
@@ -1031,7 +1033,15 @@ impl DrawerWindow
 
         if let Some(position) = self.mouse_image()
         {
-            match self.active_tool
+            let tool = if self.controls.is_down(Control::ColorPick)
+            {
+                ToolId::Pipette
+            } else
+            {
+                self.active_tool
+            };
+
+            match tool
             {
                 ToolId::Brush => self.handle_brush(position),
                 ToolId::Pipette => self.handle_pipette(position),
