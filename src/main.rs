@@ -1503,20 +1503,26 @@ impl Image
     pub fn flood_fill(&mut self, pos: Point2<usize>, color: Color)
     {
         let mut visited = HashSet::new();
+        let mut to_visit = vec![pos.map(|x| x as i32)];
 
         let start_color = self[pos];
 
-        self.fill_inner(
-            &mut visited,
-            pos.map(|x| x as i32),
-            &|compare| compare == start_color,
-            &mut |pixel| *pixel = color
-        );
+        while let Some(pos) = to_visit.pop()
+        {
+            self.fill_inner(
+                &mut visited,
+                &mut to_visit,
+                pos,
+                &|compare| compare == start_color,
+                &mut |pixel| *pixel = color
+            );
+        }
     }
 
     fn fill_inner<AF, SF>(
         &mut self,
-        visited: &mut HashSet<Point2<i32>>,
+        visited: &mut HashSet<Point2<usize>>,
+        to_visit: &mut Vec<Point2<i32>>,
         pos: Point2<i32>,
         accept: &AF,
         set: &mut SF
@@ -1525,12 +1531,7 @@ impl Image
         AF: Fn(Color) -> bool,
         SF: FnMut(&mut Color)
     {
-        let this = self.get_overflowing_mut(pos);
-
-        if !accept(*this)
-        {
-            return;
-        }
+        let pos = self.overflowing_pos(pos);
 
         let proceed = visited.insert(pos);
 
@@ -1539,12 +1540,19 @@ impl Image
             return;
         }
 
+        let this = &mut self[pos];
+        if !accept(*this)
+        {
+            return;
+        }
+
         set(this);
 
-        self.fill_inner(visited, Point2{x: pos.x + 1, ..pos}, accept, set);
-        self.fill_inner(visited, Point2{x: pos.x - 1, ..pos}, accept, set);
-        self.fill_inner(visited, Point2{y: pos.y + 1, ..pos}, accept, set);
-        self.fill_inner(visited, Point2{y: pos.y - 1, ..pos}, accept, set);
+        let pos = pos.map(|x| x as i32);
+        to_visit.push(Point2{x: pos.x + 1, ..pos});
+		to_visit.push(Point2{x: pos.x - 1, ..pos});
+		to_visit.push(Point2{y: pos.y + 1, ..pos});
+		to_visit.push(Point2{y: pos.y - 1, ..pos});
     }
 
     pub fn line_overflowing(&mut self, mut start: Point2<i32>, end: Point2<i32>, c: Color)
