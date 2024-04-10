@@ -526,10 +526,15 @@ impl<T> LazyUpdater<T>
     }
 
     pub fn set(&mut self, new_current: T)
+    where
+        T: PartialEq
     {
-        self.needs_update = true;
+        if self.current != new_current
+        {
+            self.needs_update = true;
 
-        self.current = new_current;
+            self.current = new_current;
+        }
     }
 
     #[allow(dead_code)]
@@ -657,7 +662,7 @@ impl DrawerWindow
 
         this.set_selected_color();
         this.update_cursor();
-        this.update_color_selection();
+        this.update_color_selection(true);
 
         this
     }
@@ -1012,7 +1017,7 @@ impl DrawerWindow
         self.assets.borrow_mut().update_texture(texture, &main_surface);
     }
 
-    fn update_color_selection(&mut self)
+    fn update_color_selection(&mut self, do_set: bool)
     {
         self.color_slider.set(1.0 - self.ui_group.selector_1d.get());
 
@@ -1037,7 +1042,10 @@ impl DrawerWindow
 
         if self.color_position.update() || updated_1d
         {
-            self.set_selected_color();
+            if do_set
+            {
+                self.set_selected_color();
+            }
 
             self.update_ui_texture(
                 &self.ui_group.selector_2d,
@@ -1123,8 +1131,7 @@ impl DrawerWindow
     pub fn update(&mut self, dt: f32)
     {
         self.update_cursor();
-
-        self.update_color_selection();
+        self.update_color_selection(true);
 
         let speed = 1.0;
         if self.controls.is_down(Control::ZoomIn)
@@ -1188,7 +1195,7 @@ impl DrawerWindow
 
         self.draw_color = color;
 
-        self.update_color_selection();
+        self.update_color_selection(false);
     }
 
     fn set_selected_color(&mut self)
