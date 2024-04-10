@@ -230,7 +230,7 @@ impl ScrollElement
         self.scroll
     }
 
-    fn set_scroll(&mut self, new_scroll: f32)
+    pub fn set_scroll(&mut self, new_scroll: f32)
     {
         self.scroll = new_scroll;
 
@@ -994,6 +994,11 @@ impl UiElementGlobal
     pub fn inside_position(&self, pos: Point2<f32>) -> Option<Point2<f32>>
     {
         self.intersects(pos).then(|| self.local_position(pos))
+    }
+
+    pub fn inside_position_saturating(&self, pos: Point2<f32>) -> Point2<f32>
+    {
+        self.local_position(pos).map(|x| x.clamp(0.0, 1.0))
     }
 
     fn set_aspect(&mut self, aspect: f32)

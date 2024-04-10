@@ -37,12 +37,14 @@ use ui::{
     UiEvent,
     UiComplex,
     UiAnimatableId,
+    UiElementGlobal,
     StretchMode,
     ElementId,
     ElementPrimitiveId,
     UiElementPrimitive,
     UiElementComplex,
     UiElementType,
+    ScrollElementInfo,
     ListElementInfo,
     KeepAspect
 };
@@ -270,6 +272,52 @@ struct Tool
     id: ElementPrimitiveId
 }
 
+struct ScrollWrapper
+{
+    id: ElementId,
+    value: Rc<RefCell<UiComplex>>
+}
+
+impl ScrollWrapper
+{
+    pub fn new(ui: &Ui, id: ElementId) -> Self
+    {
+        let value = ui.get_complex(&id).clone();
+
+        Self{id, value}
+    }
+
+    pub fn id(&self) -> &ElementId
+    {
+        &self.id
+    }
+
+    pub fn set(&mut self, value: f32)
+    {
+        let mut scroll = self.value.borrow_mut();
+
+        match &mut *scroll
+        {
+            UiComplex::Scroll(x) =>
+            {
+                x.set_scroll(value);
+            },
+            _ => unreachable!()
+        }
+    }
+
+    pub fn get(&mut self) -> f32
+    {
+        let scroll = self.value.borrow();
+
+        match &*scroll
+        {
+            UiComplex::Scroll(x) => x.scroll(),
+            _ => unreachable!()
+        }
+    }
+}
+
 struct UiGroup
 {
     pub main_texture: TextureId,
@@ -279,8 +327,7 @@ struct UiGroup
     pub selector_2d: ElementId,
     pub selector_2d_cursor: ElementId,
     pub selector_1d_texture: TextureId,
-    pub selector_1d: ElementId,
-    pub selector_1d_cursor: ElementId,
+    pub selector_1d: ScrollWrapper,
     pub draw_cursor: ElementId,
     pub tools: Vec<Tool>
 }
@@ -465,6 +512,71 @@ impl Controls
     }
 }
 
+struct LazyUpdater<T>
+{
+    needs_update: bool,
+    current: T
+}
+
+impl<T> LazyUpdater<T>
+{
+    pub fn new(current: T) -> Self
+    {
+        Self{needs_update: true, current}
+    }
+
+    pub fn set(&mut self, new_current: T)
+    {
+        self.needs_update = true;
+
+        self.current = new_current;
+    }
+
+    #[allow(dead_code)]
+    pub fn needs_update(&self) -> bool
+    {
+        self.needs_update
+    }
+
+    pub fn update(&mut self) -> bool
+    {
+        let previous = self.needs_update;
+
+        self.needs_update = false;
+
+        previous
+    }
+}
+
+impl<T> Deref for LazyUpdater<T>
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target
+    {
+        &self.current
+    }
+}
+
+enum HeldState
+{
+    None,
+    Draw,
+    Erase
+}
+
+impl HeldState
+{
+    pub fn active(&self) -> bool
+    {
+        match self
+        {
+            Self::None => false,
+            _ => true
+        }
+    }
+}
+
 struct DrawerWindow
 {
     window: Rc<RefCell<WindowWrapper>>,
@@ -473,11 +585,13 @@ struct DrawerWindow
     ui: Ui,
     ui_group: UiGroup,
     scale: f32,
-    color_slider: f32,
-    color_position: Point2<f32>,
+    color_slider: LazyUpdater<f32>,
+    color_position: LazyUpdater<Point2<f32>>,
     billinear: bool,
     mouse_position: Point2<i32>,
     active_tool: ToolId,
+    draw_held: HeldState,
+    selector_2d_held: bool,
     draw_color: Color,
     erase_color: Color,
     previous_draw: Option<Point2<i32>>,
@@ -528,11 +642,13 @@ impl DrawerWindow
             ui,
             ui_group,
             scale,
-            color_slider: 0.0,
-            color_position: Point2{x: 0.0, y: 0.0},
+            color_slider: LazyUpdater::new(0.0),
+            color_position: LazyUpdater::new(Point2{x: 0.0, y: 0.0}),
             billinear,
             mouse_position: Point2{x: 0, y: 0},
             active_tool: ToolId::Brush,
+            draw_held: HeldState::None,
+            selector_2d_held: false,
             draw_color,
             erase_color: Color{r: 0, g: 0, b: 0, a: 0},
             previous_draw: None,
@@ -541,8 +657,7 @@ impl DrawerWindow
 
         this.set_selected_color();
         this.update_cursor();
-        this.update_1d_cursor();
-        this.update_2d_cursor();
+        this.update_color_selection();
 
         this
     }
@@ -598,6 +713,11 @@ impl DrawerWindow
             texture: None
         });
 
+        let t = |c|
+        {
+            Self::texture_filled(assets.clone(), c)
+        };
+
         let selected_part = 0.13;
         let div = 0.9;
 
@@ -608,12 +728,15 @@ impl DrawerWindow
             texture: Some(selector_2d_texture)
         });
 
-        let selector_1d = ui.push_child(&color_selector, UiElementPrimitive{
-            kind: UiElementType::Panel,
+        let selector_1d = ui.push_child(&color_selector, UiElementComplex::Scroll(ScrollElementInfo{
             pos: Point2{x: div, y: selected_part},
             size: Point2{x: 1.0 - div, y: 1.0 - selected_part - half_pad.y}.into(),
-            texture: Some(selector_1d_texture)
-        });
+            bar_size: 0.1,
+            background: selector_1d_texture,
+            scrollbar: t(Color{r: 255, g: 255, b: 255, a: 150})
+        }));
+
+        let selector_1d = ScrollWrapper::new(ui, selector_1d);
 
         let color_image = Image::repeat(1, 1, draw_color);
         let selected_color = assets.borrow_mut().add_texture(&color_image);
@@ -624,11 +747,6 @@ impl DrawerWindow
             size: Point2{x: 1.0, y: selected_part - padding.y}.into(),
             texture: Some(selected_color)
         });
-
-        let t = |c|
-        {
-            Self::texture_filled(assets.clone(), c)
-        };
 
         let tools = {
             let names = [
@@ -733,13 +851,6 @@ impl DrawerWindow
 
         let selector_2d_cursor = ui.push_child(&selector_2d, element.clone());
 
-        let element = UiElementPrimitive{
-            size: KeepAspect::new(StretchMode::Min, Point2{x: 0.9, y: 0.9}).into(),
-            ..element
-        };
-
-        let selector_1d_cursor = ui.push_child(&selector_1d, element);
-
         let draw_cursor = ui.push_child(&main_screen, UiElementPrimitive{
             kind: UiElementType::Panel,
             pos: Point2{x: 0.0, y: 0.0},
@@ -756,7 +867,6 @@ impl DrawerWindow
             selector_2d_cursor,
             selector_1d_texture,
             selector_1d,
-            selector_1d_cursor,
             draw_cursor,
             tools
         }
@@ -875,7 +985,7 @@ impl DrawerWindow
         {
             let pos = big_pos.map(|x| x as f32) / size_m;
 
-            *color = Self::select_color(self.color_slider, pos.x, pos.y);
+            *color = Self::select_color(*self.color_slider, pos.x, pos.y);
         });
     }
 
@@ -890,7 +1000,7 @@ impl DrawerWindow
         });
     }
 
-    fn draw_ui_element<F>(&self, element: &ElementId, texture: TextureId, f: F)
+    fn update_ui_texture<F>(&self, element: &ElementId, texture: TextureId, f: F)
     where
         F: FnOnce(&mut Image)
     {
@@ -902,31 +1012,53 @@ impl DrawerWindow
         self.assets.borrow_mut().update_texture(texture, &main_surface);
     }
 
+    fn update_color_selection(&mut self)
+    {
+        self.color_slider.set(1.0 - self.ui_group.selector_1d.get());
+
+        let mut cursor = self.ui.get(&self.ui_group.selector_2d_cursor);
+
+        let position = *self.color_position;
+        cursor.set(UiAnimatableId::PositionCenteredX, position.x);
+        cursor.set(UiAnimatableId::PositionCenteredY, 1.0 - position.y);
+
+        let updated_1d = self.color_slider.update();
+        if updated_1d
+        {
+            self.update_ui_texture(
+                self.ui_group.selector_1d.id(),
+                self.ui_group.selector_1d_texture,
+                |image|
+                {
+                    self.draw_selector1d_image(image)
+                }
+            );
+        }
+
+        if self.color_position.update() || updated_1d
+        {
+            self.set_selected_color();
+
+            self.update_ui_texture(
+                &self.ui_group.selector_2d,
+                self.ui_group.selector_2d_texture,
+                |image|
+                {
+                    self.draw_selector2d_image(image)
+                }
+            );
+        }
+    }
+
     pub fn draw(&mut self)
     {
         if self.image.needs_redraw()
         {
-            self.draw_ui_element(&self.ui_group.main_screen, self.ui_group.main_texture, |image|
+            self.update_ui_texture(&self.ui_group.main_screen, self.ui_group.main_texture, |image|
             {
                 self.draw_main_image(image);
             });
         }
-
-        self.draw_ui_element(
-            &self.ui_group.selector_2d,
-            self.ui_group.selector_2d_texture,
-            |image|
-            {
-                self.draw_selector2d_image(image);
-            });
-
-        self.draw_ui_element(
-            &self.ui_group.selector_1d,
-            self.ui_group.selector_1d_texture,
-            |image|
-            {
-                self.draw_selector1d_image(image);
-            });
 
         let image = Image::repeat(1, 1, self.draw_color);
         self.assets.borrow_mut().update_texture(self.ui_group.selected_color, &image);
@@ -955,18 +1087,7 @@ impl DrawerWindow
             this.previous_draw = Some(position);
         };
 
-        let color = if self.controls.is_down(Control::Draw)
-        {
-            Some(self.draw_color)
-        } else if self.controls.is_down(Control::Erase)
-        {
-            Some(self.erase_color)
-        } else
-        {
-            None
-        };
-
-        if let Some(color) = color
+        if let Some(color) = self.held_color()
         {
             draw_with(self, color);
         }
@@ -974,28 +1095,14 @@ impl DrawerWindow
 
     fn handle_pipette(&mut self, position: Point2<i32>)
     {
-        if self.controls.is_down(Control::Draw)
-        {
-            let pos = self.image.overflowing_pos(position);
+        let pos = self.image.overflowing_pos(position);
 
-            self.set_sliders_to(self.image[pos]);
-        }
+        self.set_sliders_to(self.image[pos]);
     }
 
     fn handle_fill(&mut self, position: Point2<i32>)
     {
-        let color = if self.controls.is_down(Control::Draw)
-        {
-            Some(self.draw_color)
-        } else if self.controls.is_down(Control::Erase)
-        {
-            Some(self.erase_color)
-        } else
-        {
-            None
-        };
-
-        if let Some(color) = color
+        if let Some(color) = self.held_color()
         {
             let pos = self.image.overflowing_pos(position);
 
@@ -1003,9 +1110,21 @@ impl DrawerWindow
         }
     }
 
+    fn held_color(&self) -> Option<Color>
+    {
+        match self.draw_held
+        {
+            HeldState::None => None,
+            HeldState::Draw => Some(self.draw_color),
+            HeldState::Erase => Some(self.erase_color)
+        }
+    }
+
     pub fn update(&mut self, dt: f32)
     {
         self.update_cursor();
+
+        self.update_color_selection();
 
         let speed = 1.0;
         if self.controls.is_down(Control::ZoomIn)
@@ -1016,36 +1135,47 @@ impl DrawerWindow
             self.scale *= 1.0 + speed * dt;
         }
 
-        if self.controls.is_down(Control::Draw)
+        let draw_button = self.controls.is_down(Control::Draw);
+        let erase_button = self.controls.is_down(Control::Erase);
+        if !draw_button && !erase_button
         {
-            if let Some(position) = self.mouse_inside(&self.ui_group.selector_1d)
-            {
-                self.color_slider = position.y;
-                self.set_selected_color();
-                self.update_1d_cursor();
-            } else if let Some(position) = self.mouse_inside(&self.ui_group.selector_2d)
-            {
-                self.color_position = position;
-                self.set_selected_color();
-                self.update_2d_cursor();
-            }
+            self.draw_held = HeldState::None;
+            self.previous_draw = None;
         }
 
-        if let Some(position) = self.mouse_image()
+        if !draw_button
         {
-            let tool = if self.controls.is_down(Control::ColorPick)
+            self.selector_2d_held = false;
+        }
+
+        if self.selector_2d_held
+        {
+            let position = self.mouse_inside_saturating(&self.ui_group.selector_2d);
+
+            self.color_position.set(position);
+        }
+
+        if self.draw_held.active()
+        {
+            if let Some(position) = self.mouse_image()
             {
-                ToolId::Pipette
+                let tool = if self.controls.is_down(Control::ColorPick)
+                {
+                    ToolId::Pipette
+                } else
+                {
+                    self.active_tool
+                };
+
+                match tool
+                {
+                    ToolId::Brush => self.handle_brush(position),
+                    ToolId::Pipette => self.handle_pipette(position),
+                    ToolId::Fill => self.handle_fill(position)
+                }
             } else
             {
-                self.active_tool
-            };
-
-            match tool
-            {
-                ToolId::Brush => self.handle_brush(position),
-                ToolId::Pipette => self.handle_pipette(position),
-                ToolId::Fill => self.handle_fill(position)
+                self.previous_draw = None;
             }
         }
     }
@@ -1053,36 +1183,18 @@ impl DrawerWindow
     fn set_sliders_to(&mut self, color: Color)
     {
         let hsv = Hsv::from(color);
-        self.color_slider = hsv.h / 360.0;
-        self.color_position = Point2{x: hsv.s, y: 1.0 - hsv.v};
+        self.ui_group.selector_1d.set(1.0 - hsv.h / 360.0);
+        self.color_position.set(Point2{x: hsv.s, y: 1.0 - hsv.v});
 
         self.draw_color = color;
 
-        self.update_1d_cursor();
-        self.update_2d_cursor();
+        self.update_color_selection();
     }
 
     fn set_selected_color(&mut self)
     {
-        let position = self.color_position;
-        self.draw_color = Self::select_color(self.color_slider, position.x, position.y);
-    }
-
-    fn update_1d_cursor(&mut self)
-    {
-        let mut cursor = self.ui.get(&self.ui_group.selector_1d_cursor);
-
-        cursor.set(UiAnimatableId::PositionCenteredX, 0.5);
-        cursor.set(UiAnimatableId::PositionCenteredY, 1.0 - self.color_slider);
-    }
-
-    fn update_2d_cursor(&mut self)
-    {
-        let mut cursor = self.ui.get(&self.ui_group.selector_2d_cursor);
-
-        let position = self.color_position;
-        cursor.set(UiAnimatableId::PositionCenteredX, position.x);
-        cursor.set(UiAnimatableId::PositionCenteredY, 1.0 - position.y);
+        let position = *self.color_position;
+        self.draw_color = Self::select_color(*self.color_slider, position.x, position.y);
     }
 
     fn update_cursor(&mut self)
@@ -1123,21 +1235,54 @@ impl DrawerWindow
         }
     }
 
-    fn mouse_inside(&self, element: &ElementId) -> Option<Point2<f32>>
+    fn is_mouse_inside(&self, element: &ElementId) -> bool
     {
         let mouse_position = self.mouse_normalized();
 
-        self.ui.get(element)
-            .borrow()
-            .element()
-            .inside_position(mouse_position)
-            .map(|pos|
-            {
-                Point2{
-                    y: 1.0 - pos.y,
-                    ..pos
-                }
-            })
+        self.ui.get(element).borrow().element().intersects(mouse_position)
+    }
+
+    fn mouse_inside(&self, element: &ElementId) -> Option<Point2<f32>>
+    {
+        let (m, out) = self.mouse_inside_with(|element, pos|
+        {
+            element.inside_position(pos)
+        }, element);
+
+        out.map(m)
+    }
+
+    fn mouse_inside_saturating(&self, element: &ElementId) -> Point2<f32>
+    {
+        let (m, out) = self.mouse_inside_with(|element, pos|
+        {
+            element.inside_position_saturating(pos)
+        }, element);
+
+        m(out)
+    }
+
+    fn mouse_inside_with<T, F>(
+        &self,
+        f: F,
+        element: &ElementId
+    ) -> (impl FnOnce(Point2<f32>) -> Point2<f32>, T)
+    where
+        F: FnOnce(&UiElementGlobal, Point2<f32>) -> T
+    {
+        let mouse_position = self.mouse_normalized();
+
+        let m = |pos: Point2<f32>|
+        {
+            Point2{
+                y: 1.0 - pos.y,
+                ..pos
+            }
+        };
+
+        let t = f(self.ui.get(element).borrow().element(), mouse_position);
+
+        (m, t)
     }
 
     fn mouse_image(&self) -> Option<Point2<i32>>
@@ -1171,6 +1316,33 @@ impl DrawerWindow
                     self.active_tool = tool.tool_id;
                 }
             }
+
+            if state.is_down()
+            {
+                let draw_button = control == Control::Draw;
+                let erase_button = control == Control::Erase;
+                if draw_button || erase_button
+                {
+                    if draw_button
+                    {
+                        if self.is_mouse_inside(&self.ui_group.selector_2d)
+                        {
+                            self.selector_2d_held = true;
+                        }
+                    }
+
+                    if self.is_mouse_inside(&self.ui_group.main_screen)
+                    {
+                        self.draw_held = if draw_button
+                        {
+                            HeldState::Draw
+                        } else
+                        {
+                            HeldState::Erase
+                        };
+                    }
+                }
+            }
         }
 
         match state
@@ -1193,15 +1365,6 @@ impl DrawerWindow
             },
             State::Released =>
             {
-                match control
-                {
-                    Control::Draw | Control::Erase =>
-                    {
-                        self.previous_draw = None;
-                    },
-                    _ => ()
-                }
-
                 self.controls.set_control_up(control);
             }
         }
