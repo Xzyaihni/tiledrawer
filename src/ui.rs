@@ -574,27 +574,63 @@ impl ListElement
         {
             let mut frame = item.frame.borrow_mut();
 
-            let new_texture = if frame.element.intersects(self.mouse_pos)
+            let new_texture = 
+            if self.selected_index == Some(index)
             {
-                if self.selected_index == Some(index)
-                {
-                    self.textures.pressed
-                } else
-                {
-                    self.textures.hover
-                }
+                self.textures.pressed
             } else
             {
-                self.textures.normal
+                if frame.element.intersects(self.mouse_pos)
+                {
+                    self.textures.hover
+                } else
+                {
+                    self.textures.normal
+                }
             };
 
             frame.set_texture(new_texture);
         });
     }
 
-    fn mouse_state(&mut self, ui: &Ui, _down: bool, pos: Point2<f32>)
+    fn mouse_state(&mut self, ui: &Ui, down: bool, pos: Point2<f32>)
     {
-        self.mouse_move(ui, pos)
+        if down
+        {
+            self.items[self.draw_range.clone()].iter().enumerate().any(|(index, item)|
+            {
+                let frame = item.frame.borrow();
+                if frame.element.intersects(pos)
+                {
+                    self.selected_index = Some(index);
+
+                    true
+                } else
+                {
+                    false
+                }
+            });
+        }
+
+        self.mouse_move(ui, pos);
+    }
+
+    #[allow(dead_code)]
+    pub fn selected(&self) -> Option<usize>
+    {
+        self.selected_index
+    }
+
+    #[allow(dead_code)]
+    pub fn select_index(&mut self, index: usize)
+    {
+        self.selected_index = Some(index);
+    }
+
+    #[allow(dead_code)]
+    pub fn deselect(&mut self)
+    {
+        self.selected_index = None;
     }
 }
 

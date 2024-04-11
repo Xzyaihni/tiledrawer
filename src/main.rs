@@ -34,7 +34,6 @@ use image::{ImageError, RgbaImage, Rgba};
 
 use ui::{
     Ui,
-    UiEvent,
     UiComplex,
     UiAnimatableId,
     UiElementGlobal,
@@ -304,6 +303,7 @@ struct UiGroup
     pub selector_1d_texture: TextureId,
     pub selector_1d: ScrollWrapper,
     pub draw_cursor: ElementId,
+    pub tools_list: Rc<RefCell<UiComplex>>,
     pub tools: Vec<Tool>
 }
 
@@ -611,9 +611,19 @@ impl DrawerWindow
         };
 
         let draw_color = Color{r: 0, g: 0, b: 0, a: 255};
+
+        let active_tool = ToolId::Brush;
+
         let mut ui = Ui::new(window.clone(), assets.clone());
 
-        let ui_group = Self::new_ui(&mut ui, &font, assets.clone(), draw_color, &image);
+        let ui_group = Self::new_ui(
+            &mut ui,
+            &font,
+            assets.clone(),
+            draw_color,
+            active_tool,
+            &image
+        );
 
         let mut this = Self{
             window,
@@ -626,7 +636,7 @@ impl DrawerWindow
             color_position: LazyUpdater::new(Point2{x: 0.0, y: 0.0}),
             billinear,
             mouse_position: Point2{x: 0, y: 0},
-            active_tool: ToolId::Brush,
+            active_tool,
             draw_held: HeldState::None,
             selector_2d_held: false,
             draw_color,
@@ -647,6 +657,7 @@ impl DrawerWindow
         font: &Font<'_, 'static>,
         assets: Rc<RefCell<Assets>>,
         draw_color: Color,
+        active_tool: ToolId,
         image: &Image
     ) -> UiGroup
     {
@@ -730,6 +741,7 @@ impl DrawerWindow
             texture: Some(selected_color)
         });
 
+        let output_tools_list;
         let tools = {
             let names = [
                 (ToolId::Brush, "brush"),
@@ -772,7 +784,7 @@ impl DrawerWindow
                 size: Point2{x: 1.0, y: 1.0 - height}.into(),
                 item_height: 0.2,
                 background,
-                textures: t(Hsva{h: 0.0, s: 0.0, v: 0.95, a: 1.0}, 0.95, 0.8),
+                textures: t(Hsva{h: 0.0, s: 0.0, v: 0.95, a: 1.0}, 0.95, 0.9),
                 scroll_textures: ScrollTextures{
                     background: t(Hsva{h: 0.0, s: 0.0, v: 0.92, a: 1.0}, 0.98, 0.92),
                     scrollbar: t(Hsva{h: 0.0, s: 0.0, v: 0.85, a: 1.0}, 0.9, 0.8)
@@ -780,13 +792,18 @@ impl DrawerWindow
             }));
 
             let tools_list = ui.get_complex(&tools_list);
-            let tools_list = tools_list.borrow();
 
-            let tools_list = match &*tools_list
+            output_tools_list = tools_list.clone();
+
+            let mut tools_list = tools_list.borrow_mut();
+            let tools_list = match &mut *tools_list
             {
                 UiComplex::List(x) => x,
                 _ => unreachable!()
             };
+
+            let index = names.iter().position(|item| item.0 == active_tool).unwrap();
+            tools_list.select_index(index);
 
             tools_list.children().frames_iter().zip(names).map(|(child, (tool_id, name))|
             {
@@ -858,6 +875,7 @@ impl DrawerWindow
             selector_1d_texture,
             selector_1d,
             draw_cursor,
+            tools_list: output_tools_list,
             tools
         }
     }
@@ -1312,21 +1330,18 @@ impl DrawerWindow
 
     fn on_control(&mut self, control: Control, state: State)
     {
-        if control == Control::Draw
-        {
-            let event = self.ui.mouse_state(state.is_down(), self.mouse_normalized());
-            if let Some(UiEvent{element_id: id}) = event
-            {
-                let tool = self.ui_group.tools.iter().find(|tool|
-                {
-                    tool.id == id
-                });
+        self.ui.mouse_state(state.is_down(), self.mouse_normalized());
 
-                if let Some(tool) = tool
-                {
-                    self.active_tool = tool.tool_id;
-                }
-            }
+        let list = self.ui_group.tools_list.borrow();
+        let list = match &*list
+        {
+            UiComplex::List(x) => x,
+            _ => unreachable!()
+        };
+
+        if let Some(index) = list.selected()
+        {
+            self.active_tool = self.ui_group.tools[index].tool_id;
         }
 
         if state.is_down()
