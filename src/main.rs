@@ -943,9 +943,9 @@ impl DrawerWindow
 
     fn draw_main_image(&self, output: &mut Image)
     {
-        output.pixels_mut().for_each(|(big_pos, color)|
+        output.pixels_mut().for_each(|(pixel_pos, color)|
         {
-            let pos = big_pos.map(|a| a as f32) * self.scale;
+            let pos = pixel_pos.map(|a| a as f32) * self.scale;
 
             let new_color = if self.billinear
             {
@@ -957,43 +957,47 @@ impl DrawerWindow
                 self.image[pos.zip(self.image.size()).map(|(a, b)| a as usize % b)]
             };
 
-            // just arbitrary numbers kinda lol
-            let t_pos = if self.scale > 1.0
-            {
-                big_pos
-            } else if self.scale > 0.5
-            {
-                big_pos / 2
-            } else if self.scale > 0.1
-            {
-                big_pos / 4
-            } else
-            {
-                big_pos / 8
-            };
 
-            let transparency = if (t_pos.x + t_pos.y % 2) % 2 == 0
-            {
-                let v = 255;
-
-                Color{r: v, g: v, b: v, a: 255}
-            } else
-            {
-                let v = 150;
-
-                Color{r: v, g: v, b: v, a: 255}
-            };
-
-            let mixed_color = if new_color.a == 255
-            {
-                new_color
-            } else
-            {
-                Image::lerp(transparency, new_color, new_color.a as f32 / 255.0)
-            };
-
-            *color = mixed_color;
+            *color = self.with_transparency(pixel_pos, new_color);
         });
+    }
+
+    fn with_transparency(&self, pixel_pos: Point2<usize>, new_color: Color) -> Color
+    {
+        // just arbitrary numbers kinda lol
+        let t_pos = if self.scale > 1.0
+        {
+            pixel_pos
+        } else if self.scale > 0.5
+        {
+            pixel_pos / 2
+        } else if self.scale > 0.1
+        {
+            pixel_pos / 3
+        } else
+        {
+            pixel_pos / 4
+        };
+
+        let transparency = if (t_pos.x + t_pos.y % 2) % 2 == 0
+        {
+            let v = 255;
+
+            Color{r: v, g: v, b: v, a: 255}
+        } else
+        {
+            let v = 150;
+
+            Color{r: v, g: v, b: v, a: 255}
+        };
+
+        if new_color.a == 255
+        {
+            new_color
+        } else
+        {
+            Image::lerp(transparency, new_color, new_color.a as f32 / 255.0)
+        }
     }
 
     fn select_color(x: f32, y: f32, z: f32) -> Color
