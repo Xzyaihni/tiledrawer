@@ -570,6 +570,11 @@ impl ListElement
 
         self.mouse_pos = pos;
 
+        self.update_textures();
+    }
+
+    fn update_textures(&mut self)
+    {
         self.items[self.draw_range.clone()].iter_mut().enumerate().for_each(|(index, item)|
         {
             let mut frame = item.frame.borrow_mut();
@@ -625,12 +630,14 @@ impl ListElement
     pub fn select_index(&mut self, index: usize)
     {
         self.selected_index = Some(index);
+        self.update_textures();
     }
 
     #[allow(dead_code)]
     pub fn deselect(&mut self)
     {
         self.selected_index = None;
+        self.update_textures();
     }
 }
 
