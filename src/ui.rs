@@ -156,13 +156,14 @@ impl<'a, T: TopLevelAdder> ElementAdder<'a, T>
 #[derive(Debug, Clone)]
 pub struct ScrollElement
 {
-    held: bool,
     dragging: bool,
     scroll: f32,
     body: Rc<RefCell<UiPrimitive>>,
     body_id: ElementPrimitiveId,
+    background: Rc<RefCell<UiPrimitive>>,
     bar_rail: Rc<RefCell<UiPrimitive>>,
-    bar: Rc<RefCell<UiPrimitive>>
+    bar: Rc<RefCell<UiPrimitive>>,
+    textures: ScrollTextures
 }
 
 impl PartialEq for ScrollElement
@@ -187,11 +188,11 @@ impl ScrollElement
             texture: None
         });
 
-        let _background = adder.child(&body_id, UiElementPrimitive{
+        let background_id = adder.child(&body_id, UiElementPrimitive{
             kind: UiElementType::Panel,
             pos: Point2::repeat(0.0),
             size: Point2::repeat(1.0).into(),
-            texture: Some(info.background)
+            texture: Some(info.textures.background.normal)
         });
 
         let rail_size = 1.0 - info.bar_size;
@@ -207,21 +208,23 @@ impl ScrollElement
             kind: UiElementType::Panel,
             pos: Point2::repeat(0.0),
             size: Point2{x: 1.0, y: info.bar_size / rail_size}.into(),
-            texture: Some(info.scrollbar)
+            texture: Some(info.textures.scrollbar.normal)
         });
 
         let body = adder.ui.get_primitive(&body_id);
+        let background = adder.ui.get_primitive(&background_id);
         let bar_rail = adder.ui.get_primitive(&bar_rail_id);
         let bar = adder.ui.get_primitive(&bar_id);
 
         Self{
-            held: false,
             dragging: false,
             scroll: 0.0,
             body,
+            background,
             body_id,
             bar_rail,
-            bar
+            bar,
+            textures: info.textures
         }
     }
 
@@ -250,12 +253,12 @@ impl ScrollElement
 
             self.set_scroll(pos.y.clamp(0.0, 1.0));
         }
+        
+        self.update_textures(pos);
     }
 
     fn mouse_state(&mut self, down: bool, pos: Point2<f32>)
     {
-        self.held = down;
-
         if down
         {
             let inside = self.bar_rail.borrow().element().intersects(pos);
@@ -263,14 +266,37 @@ impl ScrollElement
 
             if inside || edge
             {
-                self.dragging = true;
+                self.set_pressed(pos, true);
             }
 
             self.mouse_move(pos);
         } else
         {
-            self.dragging = false;
+            self.set_pressed(pos, false);
         }
+    }
+
+    fn set_pressed(&mut self, pos: Point2<f32>, state: bool)
+    {
+        self.dragging = state;
+        
+        self.update_textures(pos);
+    }
+
+    fn update_textures(&mut self, pos: Point2<f32>)
+    {
+        self.set_button_texture(pos, &self.background, &self.textures.background);
+        self.set_button_texture(pos, &self.bar, &self.textures.scrollbar);
+    }
+
+    fn set_button_texture(
+        &self,
+        pos: Point2<f32>,
+        element: &Rc<RefCell<UiPrimitive>>,
+        textures: &ButtonTextures
+    )
+    {
+        textures.set_button_texture(pos, element, self.dragging)
     }
 }
 
@@ -318,7 +344,10 @@ pub struct ListElement
     scroll: Rc<RefCell<UiComplex>>,
     item_height: f32,
     last_scroll: f32,
-    draw_range: Range<usize>
+    draw_range: Range<usize>,
+    mouse_pos: Point2<f32>,
+    selected_index: Option<usize>,
+    textures: ButtonTextures
 }
 
 impl PartialEq for ListElement
@@ -350,8 +379,7 @@ impl ListElement
             pos: Point2{x: 1.0 - scrollbar_width, y: 0.0},
             size: Point2{x: scrollbar_width, y: 1.0}.into(),
             bar_size,
-            background: info.scroll_background,
-            scrollbar: info.scrollbar
+            textures: info.scroll_textures
         });
 
         let scroll = scroll.new_child(&mut adder.ui, &body_id);
@@ -379,7 +407,7 @@ impl ListElement
                 kind: UiElementType::Button,
                 pos: Point2{x: 0.0, y: 0.0},
                 size: Point2{x: 1.0, y: info.item_height}.into(),
-                texture: None
+                texture: Some(info.textures.normal)
             });
 
             let id = adder.child(&container, element);
@@ -401,7 +429,10 @@ impl ListElement
             item_height: info.item_height,
             last_scroll: 0.0,
             scroll,
-            draw_range: 0..0
+            draw_range: 0..0,
+            mouse_pos: Point2::repeat(0.0),
+            selected_index: None,
+            textures: info.textures
         };
 
         this.update_scroll(this.get_scroll());
@@ -460,42 +491,56 @@ impl ListElement
 
         let parent_size = ui.pixels_size_inner(&background).map(|x| x as usize);
 
-        let mut assets = ui.ui.assets.borrow_mut();
-        let clip_texture = ui.ui.temporary_texture;
-
-        let image = Image::repeat(parent_size.x, parent_size.y, Color{r: 0, g: 0, b: 0, a: 0});
-        assets.update_texture(clip_texture, &image);
+        let clip_texture = ui.temporary_texture(parent_size);
+        let mut clip_texture = clip_texture.borrow_mut();
 
         let size = parent_size.map(|x| x as f32);
 
+        let assets = ui.ui.assets.borrow();
         self.items[self.draw_range.clone()].iter().for_each(|item|
         {
             let value = &item.value.borrow().element;
+
+            let frame = &item.frame.borrow().element;
+
+            let pos = frame.inner.pos * size;
+
+            let frame_size = frame.inner.size.to_size(1.0) * size;
+            let value_size = value.inner.size.to_size(frame.global_size.aspect());
+
+            let size = frame_size * value_size;
+
+            if let Some(texture_id) = frame.inner.texture
+            {
+                let rect = Self::create_rect(parent_size.y as i32, pos, frame_size);
+                let texture = assets.texture(texture_id);
+
+                ui.draw_texture_to_texture(&mut clip_texture, &texture, rect);
+            }
+
             if let Some(texture_id) = value.inner.texture
             {
-                let (clip_texture, texture) = assets.get_two_mut(clip_texture, texture_id);
+                let rect = Self::create_rect(parent_size.y as i32, pos, size);
+                let texture = assets.texture(texture_id);
 
-                let frame = &item.frame.borrow().element;
-
-                let pos = (frame.inner.pos * size).map(|x| x as i32);
-
-                let frame_size = frame.inner.size.to_size(1.0);
-                let value_size = value.inner.size.to_size(frame.global_size.aspect());
-
-                let size = (frame_size * value_size * size).map(|x| x as u32 + 1);
-
-                let rect = Rect::new(
-                    pos.x,
-                    parent_size.y as i32 - pos.y - size.y as i32,
-                    size.x,
-                    size.y
-                );
-
-                ui.draw_texture_to_texture(clip_texture, texture, rect);
+                ui.draw_texture_to_texture(&mut clip_texture, &texture, rect);
             }
         });
 
-        ui.draw_texture(assets.texture(clip_texture), background);
+        ui.draw_texture(&clip_texture, background);
+    }
+
+    fn create_rect(parent_height: i32, pos: Point2<f32>, size: Point2<f32>) -> Rect
+    {
+        let pos = pos.map(|x| x as i32);
+        let size = size.map(|x| x as u32 + 1);
+
+        Rect::new(
+            pos.x,
+            parent_height - pos.y - size.y as i32,
+            size.x,
+            size.y
+        )
     }
 
     fn update_scroll(&mut self, scroll: f32)
@@ -514,7 +559,7 @@ impl ListElement
     }
 
     // i dont know if i need the &Ui anymore, im too tired of constantly removing it
-    fn mouse_move(&mut self, _ui: &Ui, _pos: Point2<f32>)
+    fn mouse_move(&mut self, _ui: &Ui, pos: Point2<f32>)
     {
         let scroll = self.get_scroll();
 
@@ -522,6 +567,29 @@ impl ListElement
         {
             self.update_scroll(scroll);
         }
+
+        self.mouse_pos = pos;
+
+        self.items[self.draw_range.clone()].iter_mut().enumerate().for_each(|(index, item)|
+        {
+            let mut frame = item.frame.borrow_mut();
+
+            let new_texture = if frame.element.intersects(self.mouse_pos)
+            {
+                if self.selected_index == Some(index)
+                {
+                    self.textures.pressed
+                } else
+                {
+                    self.textures.hover
+                }
+            } else
+            {
+                self.textures.normal
+            };
+
+            frame.set_texture(new_texture);
+        });
     }
 
     fn mouse_state(&mut self, ui: &Ui, _down: bool, pos: Point2<f32>)
@@ -862,13 +930,65 @@ impl UiElement
 }
 
 #[derive(Debug, Clone)]
+pub struct ButtonTextures
+{
+    pub normal: TextureId,
+    pub hover: TextureId,
+    pub pressed: TextureId
+}
+
+impl ButtonTextures
+{
+    pub fn repeat(t: TextureId) -> Self
+    {
+        Self{
+            normal: t,
+            hover: t,
+            pressed: t
+        }
+    }
+
+    fn set_button_texture(
+        &self,
+        pos: Point2<f32>,
+        element: &Rc<RefCell<UiPrimitive>>,
+        is_pressed: bool
+    )
+    {
+        let mut element = element.borrow_mut();
+
+        let new_texture = if is_pressed
+        {
+            self.pressed
+        } else
+        {
+            if element.element.intersects(pos)
+            {
+                self.hover
+            } else
+            {
+                self.normal
+            }
+        };
+
+        element.set_texture(new_texture);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScrollTextures
+{
+    pub background: ButtonTextures,
+    pub scrollbar: ButtonTextures
+}
+
+#[derive(Debug, Clone)]
 pub struct ScrollElementInfo
 {
     pub pos: Point2<f32>,
     pub size: UiSize,
     pub bar_size: f32,
-    pub background: TextureId,
-    pub scrollbar: TextureId
+    pub textures: ScrollTextures
 }
 
 #[derive(Debug, Clone)]
@@ -879,8 +999,8 @@ pub struct ListElementInfo
     pub size: UiSize,
     pub item_height: f32,
     pub background: TextureId,
-    pub scroll_background: TextureId,
-    pub scrollbar: TextureId
+    pub textures: ButtonTextures,
+    pub scroll_textures: ScrollTextures
 }
 
 #[derive(Debug, Clone)]
@@ -1033,6 +1153,11 @@ impl UiPrimitive
     pub fn texture(&mut self) -> &mut Option<TextureId>
     {
         &mut self.element.inner.texture
+    }
+
+    pub fn set_texture(&mut self, new_texture: TextureId)
+    {
+        self.element.inner.texture = Some(new_texture);
     }
 
     pub fn element(&self) -> &UiElementGlobal
@@ -1258,6 +1383,23 @@ impl Animatable<UiAnimatableId> for Rc<RefCell<UiPrimitive>>
     }
 }
 
+struct TemporaryTexture<'a>
+{
+    size: Point2<usize>,
+    id: TextureId,
+    inner: Ref<'a, Assets>
+}
+
+impl<'a> TemporaryTexture<'a>
+{
+    pub fn borrow_mut(&self) -> RefMut<'_, Texture<'static>>
+    {
+        let image = Image::repeat(self.size.x, self.size.y, Color{r: 0, g: 0, b: 0, a: 0});
+
+        self.inner.update_texture(self.id, &image)
+    }
+}
+
 struct UiGeneral
 {
     window: Rc<RefCell<WindowWrapper>>,
@@ -1395,14 +1537,9 @@ impl Ui
         }
     }
 
-    fn temporary_texture(&self, size: Point2<usize>) -> RefMut<Texture<'static>>
+    fn temporary_texture(&self, size: Point2<usize>) -> TemporaryTexture
     {
-        let image = Image::repeat(size.x, size.y, Color{r: 0, g: 0, b: 0, a: 0});
-
-        RefMut::map(self.ui.assets.borrow_mut(), |assets|
-        {
-            assets.update_texture(self.ui.temporary_texture, &image)
-        })
+        TemporaryTexture{size, id: self.ui.temporary_texture, inner: self.ui.assets.borrow()}
     }
 
     fn draw_element(&self, element: &UiElementGlobal)
@@ -1411,7 +1548,7 @@ impl Ui
         {
             let assets = self.ui.assets.borrow();
 
-            self.draw_texture(assets.texture(texture_id), element);
+            self.draw_texture(&assets.texture(texture_id), element);
         }
     }
 
@@ -1424,14 +1561,16 @@ impl Ui
             .unwrap();
     }
 
-    fn draw_to_texture(&self, texture: &mut Texture, element: &UiElementGlobal)
+    fn draw_to_texture(&self, target_texture: &mut Texture, element: &UiElementGlobal)
     {
         if let Some(texture_id) = element.inner.texture
         {
             let assets = self.ui.assets.borrow();
 
             let rect = self.element_rect(element);
-            self.draw_texture_to_texture(texture, assets.texture(texture_id), rect)
+            let texture = assets.texture(texture_id);
+
+            self.draw_texture_to_texture(target_texture, &texture, rect)
         }
     }
 
@@ -1457,7 +1596,9 @@ impl Ui
             let assets = self.ui.assets.borrow();
 
             let rect = self.element_rect(element);
-            f(assets.texture(texture_id), rect)
+            let texture = assets.texture(texture_id);
+
+            f(&texture, rect)
         }
     }
 

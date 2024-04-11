@@ -8,7 +8,7 @@ use std::{
     thread,
     process,
     rc::Rc,
-    cell::{RefMut, RefCell},
+    cell::{Ref, RefMut, RefCell},
     fmt::Display,
     path::Path,
     time::Duration,
@@ -44,7 +44,9 @@ use ui::{
     UiElementPrimitive,
     UiElementComplex,
     UiElementType,
+    ButtonTextures,
     ScrollElementInfo,
+    ScrollTextures,
     ListElementInfo,
     KeepAspect
 };
@@ -53,7 +55,7 @@ use animator::Animatable;
 pub use point::Point2;
 
 pub use color::Color;
-use color::Hsv;
+use color::{Hsv, Hsva};
 
 use config::Config;
 
@@ -78,14 +80,14 @@ struct HeldTexture
 {
     size: Point2<usize>,
     access: TextureAccess,
+    // i despise the lifetime on the texture, this sdl wrapper is absolute CANCER
     texture: Texture<'static>
 }
 
 pub struct Assets
 {
     creator: TextureCreator<WindowContext>,
-    // i despise the lifetime on the texture, this sdl wrapper is absolute CANCER
-    textures: Vec<HeldTexture>
+    textures: Vec<RefCell<HeldTexture>>
 }
 
 impl Assets
@@ -130,37 +132,37 @@ impl Assets
     {
         let id = self.textures.len();
 
-        self.textures.push(texture);
+        self.textures.push(RefCell::new(texture));
 
         TextureId(id)
     }
 
     pub fn update_texture<'a, 'b>(
-        &'a mut self,
+        &'a self,
         id: TextureId,
         image: &'b Image
-    ) -> &'a mut Texture<'static>
+    ) -> RefMut<'a, Texture<'static>>
     {
         let texture = &self.textures[id.0];
+        let mut texture = texture.borrow_mut();
         if image.size() != texture.size
         {
             let access = texture.access;
 
             if let Some(new_texture) = unsafe{ self.texture_from_image(access, image) }
             {
-                self.textures[id.0] = new_texture;
+                *texture = new_texture;
             }
 
-            return self.texture_mut(id);
+            return RefMut::map(texture, |c| &mut c.texture);
         }
 
         let data = image.data_bytes();
         let row = image.bytes_row();
 
-        let texture = self.texture_mut(id);
-        texture.update(None, data, row).unwrap();
+        texture.texture.update(None, data, row).unwrap();
 
-        texture
+        RefMut::map(texture, |c| &mut c.texture)
     }
 
     // cant do anything about the errors anyway, just Option it
@@ -196,41 +198,14 @@ impl Assets
         mem::transmute(texture)
     }
 
-    pub fn get_two_mut<'a>(
-        &'a mut self,
-        one: TextureId,
-        two: TextureId
-    ) -> (&'a mut Texture<'static>, &'a mut Texture<'static>)
+    pub fn texture(&self, id: TextureId) -> Ref<Texture<'static>>
     {
-        let one = one.0;
-        let two = two.0; 
-
-        if one == two
-        {
-            panic!("get_two both indices cant be the same");
-        }
-
-        if one > two
-        {
-            let (left, right) = self.textures.split_at_mut(one);
-
-            (&mut right[0].texture, &mut left[two].texture)
-        } else
-        {
-            let (left, right) = self.textures.split_at_mut(two);
-
-            (&mut left[one].texture, &mut right[0].texture)
-        }
+        Ref::map(self.textures[id.0].borrow(), |c| &c.texture)
     }
 
-    pub fn texture(&self, id: TextureId) -> &Texture<'static>
+    pub fn texture_mut<'a>(&'a self, id: TextureId) -> RefMut<'a, Texture<'static>>
     {
-        &self.textures[id.0].texture
-    }
-
-    pub fn texture_mut<'a>(&'a mut self, id: TextureId) -> &'a mut Texture<'static>
-    {
-        &mut self.textures[id.0].texture
+        RefMut::map(self.textures[id.0].borrow_mut(), |c| &mut c.texture)
     }
 }
 
@@ -718,9 +693,9 @@ impl DrawerWindow
             texture: None
         });
 
-        let t = |c|
+        let t = |c, hover, pressed|
         {
-            Self::texture_filled(assets.clone(), c)
+            Self::create_button_texture(assets.clone(), c, hover, pressed)
         };
 
         let selected_part = 0.13;
@@ -737,8 +712,10 @@ impl DrawerWindow
             pos: Point2{x: div, y: selected_part},
             size: Point2{x: 1.0 - div, y: 1.0 - selected_part - half_pad.y}.into(),
             bar_size: 0.1,
-            background: selector_1d_texture,
-            scrollbar: t(Color{r: 255, g: 255, b: 255, a: 150})
+            textures: ScrollTextures{
+                background: ButtonTextures::repeat(selector_1d_texture),
+                scrollbar: t(Hsva{h: 0.0, s: 0.0, v: 1.0, a: 0.7}, 0.9, 0.8)
+            }
         }));
 
         let selector_1d = ScrollWrapper::new(ui, selector_1d);
@@ -784,14 +761,22 @@ impl DrawerWindow
                 }
             }).collect();
 
+            let background = Self::texture_filled(
+                assets.clone(),
+                Hsv{h: 0.0, s: 0.0, v: 0.95}.into()
+            );
+
             let tools_list = ui.push_child(&side_screen, UiElementComplex::List(ListElementInfo{
                 items,
                 pos: Point2{x: 0.0, y: 0.0},
                 size: Point2{x: 1.0, y: 1.0 - height}.into(),
                 item_height: 0.2,
-                background: t(Color{r: 242, g: 242, b: 242, a: 255}),
-                scroll_background: t(Color{r: 235, g: 235, b: 235, a: 255}),
-                scrollbar: t(Color{r: 205, g: 205, b: 205, a: 255})
+                background,
+                textures: t(Hsva{h: 0.0, s: 0.0, v: 0.95, a: 1.0}, 0.95, 0.8),
+                scroll_textures: ScrollTextures{
+                    background: t(Hsva{h: 0.0, s: 0.0, v: 0.92, a: 1.0}, 0.98, 0.92),
+                    scrollbar: t(Hsva{h: 0.0, s: 0.0, v: 0.85, a: 1.0}, 0.9, 0.8)
+                }
             }));
 
             let tools_list = ui.get_complex(&tools_list);
@@ -874,6 +859,25 @@ impl DrawerWindow
             selector_1d,
             draw_cursor,
             tools
+        }
+    }
+
+    fn create_button_texture(
+        assets: Rc<RefCell<Assets>>,
+        color: Hsva,
+        hover: f32,
+        pressed: f32
+    ) -> ButtonTextures
+    {
+        let t = |c: Hsva|
+        {
+            Self::texture_filled(assets.clone(), c.into())
+        };
+
+        ButtonTextures{
+            normal: t(color),
+            hover: t(Hsva{v: color.v * hover, ..color}),
+            pressed: t(Hsva{v: color.v * pressed, ..color})
         }
     }
 
@@ -1323,31 +1327,31 @@ impl DrawerWindow
                     self.active_tool = tool.tool_id;
                 }
             }
+        }
 
-            if state.is_down()
+        if state.is_down()
+        {
+            let draw_button = control == Control::Draw;
+            let erase_button = control == Control::Erase;
+            if draw_button || erase_button
             {
-                let draw_button = control == Control::Draw;
-                let erase_button = control == Control::Erase;
-                if draw_button || erase_button
+                if draw_button
                 {
-                    if draw_button
+                    if self.is_mouse_inside(&self.ui_group.selector_2d)
                     {
-                        if self.is_mouse_inside(&self.ui_group.selector_2d)
-                        {
-                            self.selector_2d_held = true;
-                        }
+                        self.selector_2d_held = true;
                     }
+                }
 
-                    if self.is_mouse_inside(&self.ui_group.main_screen)
+                if self.is_mouse_inside(&self.ui_group.main_screen)
+                {
+                    self.draw_held = if draw_button
                     {
-                        self.draw_held = if draw_button
-                        {
-                            HeldState::Draw
-                        } else
-                        {
-                            HeldState::Erase
-                        };
-                    }
+                        HeldState::Draw
+                    } else
+                    {
+                        HeldState::Erase
+                    };
                 }
             }
         }

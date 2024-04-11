@@ -36,9 +36,9 @@ impl From<Color> for SdlColor
     }
 }
 
-impl From<Hsv> for Color
+impl From<Hsva> for Color
 {
-    fn from(hsv: Hsv) -> Self
+    fn from(hsva: Hsva) -> Self
     {
         let t = |v: f32|
         {
@@ -47,15 +47,46 @@ impl From<Hsv> for Color
 
         let f = |n: f32| -> u8
         {
-            let k = (n + hsv.h / 60.0) % 6.0;
+            let k = (n + hsva.h / 60.0) % 6.0;
 
-            t(hsv.v - hsv.v * hsv.s * (k.min(4.0 - k)).clamp(0.0, 1.0))
+            t(hsva.v - hsva.v * hsva.s * (k.min(4.0 - k)).clamp(0.0, 1.0))
         };
 
-        Color{r: f(5.0), g: f(3.0), b: f(1.0), a: 255}
+        Color{r: f(5.0), g: f(3.0), b: f(1.0), a: t(hsva.a)}
     }
 }
 
+impl From<Hsv> for Color
+{
+    fn from(hsv: Hsv) -> Self
+    {
+        Hsva::from(hsv).into()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hsva
+{
+    pub h: f32,
+    pub s: f32,
+    pub v: f32,
+    pub a: f32
+}
+
+impl From<Hsv> for Hsva
+{
+    fn from(hsv: Hsv) -> Self
+    {
+        Self{
+            h: hsv.h,
+            s: hsv.s,
+            v: hsv.v,
+            a: 1.0
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hsv
 {
     pub h: f32,
