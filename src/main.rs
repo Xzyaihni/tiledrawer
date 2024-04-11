@@ -326,9 +326,13 @@ impl DrawImage
         Self{image, needs_redraw: true, undos}
     }
 
-    pub fn needs_redraw(&self) -> bool
+    pub fn redraw(&mut self) -> bool
     {
-        self.needs_redraw
+        let needs = self.needs_redraw;
+
+        self.needs_redraw = false;
+
+        needs
     }
 
     pub fn add_undo(&mut self)
@@ -945,16 +949,14 @@ impl DrawerWindow
     {
         output.pixels_mut().for_each(|(pixel_pos, color)|
         {
-            let pos = pixel_pos.map(|a| a as f32) * self.scale;
+            let pos = self.position_to_image(pixel_pos.map(|x| x as f32));
 
             let new_color = if self.billinear
             {
-                let pos = pos.zip(self.image.size()).map(|(a, b)| a % b as f32);
-
                 self.image.get_billinear_overflowing(pos)
             } else
             {
-                self.image[pos.zip(self.image.size()).map(|(a, b)| a as usize % b)]
+                self.image.get_overflowing(pos.map(|x| x as i32))
             };
 
 
@@ -1086,7 +1088,7 @@ impl DrawerWindow
 
     pub fn draw(&mut self)
     {
-        if self.image.needs_redraw()
+        if self.image.redraw()
         {
             self.update_ui_texture(&self.ui_group.main_screen, self.ui_group.main_texture, |image|
             {
@@ -1325,11 +1327,13 @@ impl DrawerWindow
         let size = self.ui.pixels_size(element).map(|x| x as f32);
         self.mouse_inside(element).map(|pos|
         {
-            (pos * size).map(|mouse|
-            {
-                (mouse * self.scale) as i32
-            })
+            self.position_to_image(pos * size).map(|x| x as i32)
         })
+    }
+
+    fn position_to_image(&self, position: Point2<f32>) -> Point2<f32>
+    {
+        position * self.scale
     }
 
     fn on_control(&mut self, control: Control, state: State)
@@ -1659,7 +1663,20 @@ impl Image
         let low = point.map(|x| x.floor() as i32);
         let high = point.map(|x| x.ceil() as i32);
 
-        let x_lerp = point.x.fract();
+        let fract_abs = |x: f32|
+        {
+            let x = x.fract();
+
+            if x > 0.0
+            {
+                x
+            } else
+            {
+                1.0 + x
+            }
+        };
+
+        let x_lerp = fract_abs(point.x);
         let top = Self::lerp(
             g(Point2{x: low.x, y: high.y}),
             g(Point2{x: high.x, y: high.y}),
@@ -1672,7 +1689,7 @@ impl Image
             x_lerp
         );
 
-        Self::lerp(bottom, top, point.y.fract())
+        Self::lerp(bottom, top, fract_abs(point.y))
     }
 
     fn lerp(a: Color, b: Color, t: f32) -> Color
