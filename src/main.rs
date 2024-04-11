@@ -335,6 +335,11 @@ impl DrawImage
         needs
     }
 
+    pub fn dirty(&mut self)
+    {
+        self.needs_redraw = true;
+    }
+
     pub fn add_undo(&mut self)
     {
         if self.undos.len() > UNDO_LIMIT
@@ -1333,6 +1338,9 @@ impl DrawerWindow
 
     fn position_to_image(&self, position: Point2<f32>) -> Point2<f32>
     {
+        // let half_size = output.size().map(|x| x as f32) * 0.5;
+
+        // let pos = (pixel_pos.map(|a| a as f32) - half_size) * self.scale;
         position * self.scale
     }
 
@@ -1411,8 +1419,6 @@ impl DrawerWindow
 
         loop
         {
-            let mut special_event = false;
-
             for event in events.poll_iter()
             {
                 match event
@@ -1460,12 +1466,12 @@ impl DrawerWindow
                             {
                                 self.ui.resized();
 
-                                special_event = true;
+                                self.image.dirty();
                             },
                             WindowEvent::FocusGained
                                 | WindowEvent::Exposed =>
                             {
-                                special_event = true;
+                                self.image.dirty();
                             },
                             _ => ()
                         }
@@ -1474,10 +1480,9 @@ impl DrawerWindow
                 }
             }
 
-            // i hate the borrow checker
-            if special_event
+            if self.controls.is_down(Control::ZoomIn) || self.controls.is_down(Control::ZoomOut)
             {
-                // self.needs_redraw = true;
+                self.image.dirty();
             }
 
             self.update(dt);
