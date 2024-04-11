@@ -578,6 +578,7 @@ struct DrawerWindow
     color_position: LazyUpdater<Point2<f32>>,
     billinear: bool,
     mouse_position: Point2<i32>,
+    half_screen_size: Point2<f32>,
     active_tool: ToolId,
     draw_held: HeldState,
     selector_2d_held: bool,
@@ -642,9 +643,10 @@ impl DrawerWindow
             ui_group,
             scale,
             color_slider: LazyUpdater::new(0.0),
-            color_position: LazyUpdater::new(Point2{x: 0.0, y: 0.0}),
+            color_position: LazyUpdater::new(Point2::repeat(0.0)),
             billinear,
-            mouse_position: Point2{x: 0, y: 0},
+            mouse_position: Point2::repeat(0),
+            half_screen_size: Point2::repeat(0.0),
             active_tool,
             draw_held: HeldState::None,
             selector_2d_held: false,
@@ -654,6 +656,7 @@ impl DrawerWindow
             controls: Controls::new()
         };
 
+        this.on_resized();
         this.set_selected_color();
         this.update_cursor();
         this.update_color_selection(true);
@@ -961,7 +964,7 @@ impl DrawerWindow
                 self.image.get_billinear_overflowing(pos)
             } else
             {
-                self.image.get_overflowing(pos.map(|x| x as i32))
+                self.image.get_overflowing(pos.map(|x| x.floor() as i32))
             };
 
 
@@ -1253,7 +1256,8 @@ impl DrawerWindow
 
         if let Some(pos) = self.mouse_image()
         {
-            let pos = (pos + Point2{x: 0, y: 1}).map(|x| x as f32) / total_size / self.scale;
+            let pos = (pos + Point2{x: 0, y: 1}).map(|x| x as f32) / total_size;
+            let pos = (pos / self.scale) + 0.5;
 
             let offset = single_pixel * 0.1;
             let pos = pos + Point2{x: -offset, y: offset};
@@ -1332,16 +1336,19 @@ impl DrawerWindow
         let size = self.ui.pixels_size(element).map(|x| x as f32);
         self.mouse_inside(element).map(|pos|
         {
-            self.position_to_image(pos * size).map(|x| x as i32)
+            self.position_to_image(pos * size).map(|x| x.floor() as i32)
         })
     }
 
     fn position_to_image(&self, position: Point2<f32>) -> Point2<f32>
     {
-        // let half_size = output.size().map(|x| x as f32) * 0.5;
+        (position - self.half_screen_size) * self.scale
+    }
 
-        // let pos = (pixel_pos.map(|a| a as f32) - half_size) * self.scale;
-        position * self.scale
+    #[allow(dead_code)]
+    fn position_to_image_inv(&self, position: Point2<f32>) -> Point2<f32>
+    {
+        (position / self.scale) + self.half_screen_size
     }
 
     fn on_control(&mut self, control: Control, state: State)
@@ -1412,6 +1419,14 @@ impl DrawerWindow
         }
     }
 
+    fn on_resized(&mut self)
+    {
+        self.ui.resized();
+
+        self.half_screen_size = self.ui.pixels_size(&self.ui_group.main_screen)
+            .map(|x| x as f32) / 2.0;
+    }
+
     pub fn wait_exit(&mut self, events: &mut EventPump)
     {
         let fps = 60;
@@ -1464,7 +1479,7 @@ impl DrawerWindow
                         {
                             WindowEvent::SizeChanged(..) =>
                             {
-                                self.ui.resized();
+                                self.on_resized();
 
                                 self.image.dirty();
                             },
