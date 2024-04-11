@@ -230,12 +230,13 @@ impl WindowWrapper
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum ToolId
 {
     Pipette,
     Brush,
-    Fill
+    Fill,
+    Move{held_position: Option<Point2<f32>>}
 }
 
 #[allow(dead_code)]
@@ -547,6 +548,7 @@ impl<T> Deref for LazyUpdater<T>
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HeldState
 {
     None,
@@ -579,6 +581,7 @@ struct DrawerWindow
     billinear: bool,
     mouse_position: Point2<i32>,
     half_screen_size: Point2<f32>,
+    screen_offset: Point2<f32>,
     active_tool: ToolId,
     draw_held: HeldState,
     selector_2d_held: bool,
@@ -647,6 +650,7 @@ impl DrawerWindow
             billinear,
             mouse_position: Point2::repeat(0),
             half_screen_size: Point2::repeat(0.0),
+            screen_offset: Point2::repeat(0.0),
             active_tool,
             draw_held: HeldState::None,
             selector_2d_held: false,
@@ -758,7 +762,8 @@ impl DrawerWindow
             let names = [
                 (ToolId::Brush, "brush"),
                 (ToolId::Pipette, "pipette"),
-                (ToolId::Fill, "fill")
+                (ToolId::Fill, "fill"),
+                (ToolId::Move{held_position: None}, "move")
             ];
 
             let items = names.iter().map(|(_tool_id, name)|
@@ -778,7 +783,7 @@ impl DrawerWindow
                 let size = Point2{x: 1.0 / aspect, y: 1.0};
 
                 UiElementPrimitive{
-                    kind: UiElementType::Button,
+                    kind: UiElementType::Panel,
                     pos: Point2{x: 0.0, y: 0.0},
                     size: KeepAspect::new(StretchMode::LockY, size).into(),
                     texture: Some(texture)
@@ -1198,6 +1203,49 @@ impl DrawerWindow
             self.color_position.set(position);
         }
 
+        self.handle_tool();
+    }
+
+    fn handle_tool(&mut self)
+    {
+        let mouse_position = self.mouse_normalized();
+        let total_size = self.ui.pixels_size(&self.ui_group.main_screen).map(|x| x as f32);
+        let screen_aspect = self.ui.get(&self.ui_group.main_screen).borrow().size().aspect();
+
+        match &mut self.active_tool
+        {
+            ToolId::Move{held_position} =>
+            {
+                match self.draw_held
+                {
+                    HeldState::Draw =>
+                    {
+                        if let Some(start) = held_position
+                        {
+                            let moved = mouse_position - *start;
+
+                            let change = moved * self.scale * total_size;
+
+                            self.screen_offset.x -= change.x / screen_aspect;
+                            self.screen_offset.y += change.y;
+
+                            self.image.dirty();
+                        }
+
+                        *held_position = Some(mouse_position);
+                    },
+                    HeldState::None =>
+                    {
+                        *held_position = None;
+                    },
+                    HeldState::Erase => ()
+                }
+
+                return;
+            },
+            _ => ()
+        }
+
         if self.draw_held.active()
         {
             if let Some(position) = self.mouse_image()
@@ -1214,7 +1262,8 @@ impl DrawerWindow
                 {
                     ToolId::Brush => self.handle_brush(position),
                     ToolId::Pipette => self.handle_pipette(position),
-                    ToolId::Fill => self.handle_fill(position)
+                    ToolId::Fill => self.handle_fill(position),
+                    ToolId::Move{..} => unreachable!()
                 }
             } else
             {
@@ -1256,8 +1305,8 @@ impl DrawerWindow
 
         if let Some(pos) = self.mouse_image()
         {
-            let pos = (pos + Point2{x: 0, y: 1}).map(|x| x as f32) / total_size;
-            let pos = (pos / self.scale) + 0.5;
+            let pos = (pos + Point2{x: 0, y: 1}).map(|x| x as f32);
+            let pos = self.position_to_image_inv(pos) / total_size;
 
             let offset = single_pixel * 0.1;
             let pos = pos + Point2{x: -offset, y: offset};
@@ -1342,13 +1391,12 @@ impl DrawerWindow
 
     fn position_to_image(&self, position: Point2<f32>) -> Point2<f32>
     {
-        (position - self.half_screen_size) * self.scale
+        (position - self.half_screen_size) * self.scale + self.screen_offset
     }
 
-    #[allow(dead_code)]
     fn position_to_image_inv(&self, position: Point2<f32>) -> Point2<f32>
     {
-        (position / self.scale) + self.half_screen_size
+        ((position - self.screen_offset) / self.scale) + self.half_screen_size
     }
 
     fn on_control(&mut self, control: Control, state: State)
@@ -1364,7 +1412,12 @@ impl DrawerWindow
 
         if let Some(index) = list.selected()
         {
-            self.active_tool = self.ui_group.tools[index].tool_id;
+            let new_tool = self.ui_group.tools[index].tool_id;
+
+            if mem::discriminant(&self.active_tool) != mem::discriminant(&new_tool)
+            {
+                self.active_tool = new_tool;
+            }
         }
 
         if state.is_down()
